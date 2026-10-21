@@ -4,7 +4,7 @@
 const { db, getConfig, setConfig, log } = require('./db');
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
 const { validarEstrutura, TIPOS_CONDICAO } = require('./regras');
-const { backtest, estatisticas } = require('./validador');
+const { backtest, estatisticas, aoVivo } = require('./validador');
 const jogos = require('./jogos');
 
 const MERCADOS_PRINCIPAIS = ['ambas_sim', 'ambas_nao', 'over_15', 'over_25', 'over_35', 'under_25', 'casa', 'empate', 'fora'];
@@ -35,6 +35,35 @@ function mudancas(janela = 150) {
   return out.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
 }
 
+// ---------- Memória: como foram as sugestões anteriores da IA ----------
+function resumoRegra(r, vivo) {
+  const v = r.validacao ? (typeof r.validacao === 'string' ? JSON.parse(r.validacao) : r.validacao) : null;
+  return {
+    nome: r.nome, mercado: r.mercado,
+    ligas: typeof r.ligas === 'string' ? JSON.parse(r.ligas) : r.ligas,
+    condicoes: typeof r.condicoes === 'string' ? JSON.parse(r.condicoes) : r.condicoes,
+    tiros: r.tiros || 1,
+    situacao: { pendente: 'aguardando aprovação', telegram: 'aprovada (Telegram)', observacao: 'em observação', desligado: 'pausada' }[r.modo] || r.modo,
+    prova_final: v && v.prova ? { n: v.prova.n, taxa: v.prova.taxa, roi: v.prova.roi } : null,
+    ao_vivo: vivo && vivo.n ? { sinais: vivo.n, taxa: vivo.taxa, roi: vivo.roi } : null,
+  };
+}
+
+// Guarda o resultado de uma regra da IA antes de ela ser excluída
+function lembrarExcluida(regraRow) {
+  if (!regraRow || regraRow.origem !== 'ia') return;
+  const vivo = aoVivo(regraRow.id);
+  const mem = getConfig('ia_memoria', []) || [];
+  mem.unshift({ ...resumoRegra(regraRow, vivo), situacao: 'excluída pelo usuário', em: new Date().toISOString() });
+  setConfig('ia_memoria', mem.slice(0, 60));
+}
+
+function memoria() {
+  const atuais = db.prepare(`SELECT * FROM regras WHERE origem = 'ia'`).all().map((r) => resumoRegra(r, aoVivo(r.id)));
+  const antigas = getConfig('ia_memoria', []) || [];
+  return { atuais, excluidas: antigas.slice(0, 30) };
+}
+
 // ---------- Resumo dos dados para a IA ----------
 function contexto() {
   const ligas = {};
@@ -51,14 +80,15 @@ function contexto() {
     ligas[liga] = linha;
   }
   const desc = getConfig('descoberta');
-  const resumir = (r) => ({ nome: r.nome, mercado: r.mercado, ligas: r.ligas, condicoes: r.condicoes,
-    treino: { n: r.treino.n, taxa: r.treino.taxa, roi: r.treino.roi, z: r.treino.z },
-    teste: { n: r.teste.n, taxa: r.teste.taxa, roi: r.teste.roi, z: r.teste.z } });
+  const p = (x) => (x ? { n: x.n, taxa: x.taxa, roi: x.roi, z: x.z } : null);
+  const resumir = (r) => ({ nome: r.nome, mercado: r.mercado, ligas: r.ligas, condicoes: r.condicoes, tiros: r.tiros,
+    treino: p(r.treino), validacao: p(r.validacao), prova_final: p(r.prova), dias_positivos: r.dias });
   return {
     ligas,
     mudancas_recentes: mudancas().slice(0, 15),
     candidatas_que_se_sustentaram: desc ? (desc.sustentaram || []).slice(0, 25).map(resumir) : [],
     candidatas_melhores_no_treino: desc ? (desc.ranking || []).slice(0, 10).map(resumir) : [],
+    suas_sugestoes_anteriores: memoria(),
   };
 }
 
@@ -68,7 +98,12 @@ Seu trabalho: propor até ${qtd} regras de sinal para o sistema testar. O usuár
 
 Regras importantes:
 - Use SOMENTE os dados enviados. Não invente estatísticas nem porcentagens: o sistema recalcula tudo no histórico real.
-- Prefira ideias que se sustentaram no treino E no teste, com amostra grande e ROI positivo. Considere as mudanças recentes das ligas.
+- O histórico é dividido em 3 partes: treino (50%), validação (25%) e prova final (25%, a mais recente).
+  Prefira ideias com ROI positivo nas 3 partes, amostra grande e lucro na maioria dos dias. Considere as mudanças recentes das ligas.
+- APRENDA com "suas_sugestoes_anteriores": é o resultado REAL do que você já sugeriu.
+  Evite repetir mercados/ligas/condições que deram ROI ao vivo negativo ou foram excluídos pelo usuário.
+  Reforce o tipo de ideia que está com ROI ao vivo positivo. Não repita uma regra que já existe.
+  Diga em "observacoes" o que aprendeu com esses resultados.
 - Seja honesto: se nada parece ter vantagem real sobre a odd, proponha menos regras e diga isso em "observacoes".
 - Cada sinal pode ter de 1 a 3 tiros (o sinal vale para até N jogos seguidos). Padrão do usuário: ${tiros}.
 
@@ -180,4 +215,4 @@ function situacao() {
   };
 }
 
-module.exports = { sugerir, situacao, mudancas };
+module.exports = { sugerir, situacao, mudancas, lembrarExcluida };

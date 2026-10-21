@@ -2,7 +2,7 @@
 // A escolha das melhores é feita SÓ no treino (1ª metade). O teste (2ª metade)
 // mostra se a ideia continuou funcionando em jogos que ela não viu.
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
-const { estatisticas, classificar, simularLiga } = require('./validador');
+const { simularLiga, analisar, cortes } = require('./validador');
 const jogos = require('./jogos');
 const { getConfig, setConfig, log } = require('./db');
 
@@ -48,18 +48,11 @@ function candidatos(mercado) {
   return lista;
 }
 
-function corteGlobal() {
-  const ts = [];
-  for (const l of Object.keys(LIGAS)) for (const j of jogos.daLiga(l)) ts.push(j.t);
-  ts.sort((a, b) => a - b);
-  return ts.length ? ts[Math.floor(ts.length / 2)] : 0;
-}
-
-// testa uma ideia em um conjunto de ligas (com os tiros configurados)
-function testar(regra, ligas, corte, tiros) {
-  const tr = [], te = [];
-  for (const liga of ligas) for (const e of simularLiga(regra, liga, tiros)) (e.t < corte ? tr : te).push(e);
-  return { treino: estatisticas(tr), teste: estatisticas(te) };
+// testa uma ideia em um conjunto de ligas (com os tiros configurados), nas 3 partes
+function testar(regra, ligas, c50, c75, tiros) {
+  const entradas = [];
+  for (const liga of ligas) entradas.push(...simularLiga(regra, liga, tiros));
+  return analisar(entradas, c50, c75);
 }
 
 async function rodar() {
@@ -70,7 +63,7 @@ async function rodar() {
   try {
     const todasLigas = Object.keys(LIGAS).filter((l) => jogos.daLiga(l).length > 100);
     const opcoesLiga = [['*', todasLigas], ...todasLigas.map((l) => [l, [l]])];
-    const corte = corteGlobal();
+    const { c50, c75 } = cortes(todasLigas);
     const tiros = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
     const planos = [];
     for (const mercado of Object.keys(MERCADOS)) {
@@ -81,29 +74,33 @@ async function rodar() {
     for (let k = 0; k < planos.length; k++) {
       const { mercado, c, chave, ligas } = planos[k];
       const regra = { mercado, condicoes: c.condicoes };
-      const { treino, teste } = testar(regra, ligas, corte, tiros);
-      if (treino.roi != null && treino.n >= 40) {
+      const a = testar(regra, ligas, c50, c75, tiros);
+      if (a.treino.roi != null && a.treino.n >= 40) {
         resultados.push({
           mercado, ligas: [chave], condicoes: c.condicoes, tiros,
           nome: `${MERCADOS[mercado].nome} · ${chave === '*' ? 'Todas' : LIGAS[chave]} · ${c.desc}`,
-          treino, teste, status: classificar(treino, teste),
+          treino: a.treino, validacao: a.validacao, prova: a.prova, teste: a.teste,
+          dias: { total: a.dias.total, positivos: a.dias.positivos }, status: a.status,
         });
       }
       estado.progresso = k + 1;
       if (k % 25 === 0) await pausa();
     }
 
+    // 1) lucrou no treino; 2) escolhidas usando SÓ treino + validação; 3) a prova final fica intocada
     const lucraramTreino = resultados.filter((r) => r.treino.roi > 0);
-    const continuaram = lucraramTreino.filter((r) => r.teste.n >= 20 && r.teste.roi > 0);
-    // ranking escolhido SÓ pelo treino (confiança z), como faria um apostador olhando o passado
+    const passaramValidacao = lucraramTreino.filter((r) => r.validacao.n >= 10 && r.validacao.roi > 0);
+    const confirmaram = passaramValidacao.filter((r) => r.prova.n >= 10 && r.prova.roi > 0);
     const ranking = [...lucraramTreino].sort((a, b) => (b.treino.z ?? -99) - (a.treino.z ?? -99)).slice(0, 40);
-    // e as que se sustentaram nas duas metades
-    const sustentaram = [...continuaram].sort((a, b) =>
-      Math.min(b.treino.z ?? -99, b.teste.z ?? -99) - Math.min(a.treino.z ?? -99, a.teste.z ?? -99)).slice(0, 40);
+    const sustentaram = [...passaramValidacao].sort((a, b) =>
+      Math.min(b.treino.z ?? -99, b.validacao.z ?? -99) - Math.min(a.treino.z ?? -99, a.validacao.z ?? -99)).slice(0, 40);
+    const continuaram = confirmaram;
 
     const res = {
       em: new Date().toISOString(),
-      corte: new Date(corte).toISOString(),
+      corte: new Date(c50).toISOString(),
+      corteProva: new Date(c75).toISOString(),
+      passaramValidacao: passaramValidacao.length,
       tiros,
       testadas: planos.length,
       comAmostra: resultados.length,
@@ -114,7 +111,7 @@ async function rodar() {
       sustentaram,
     };
     setConfig('descoberta', res);
-    log('info', `Descobrir padrões: ${planos.length} ideias testadas, ${continuaram.length} lucraram nas duas metades`);
+    log('info', `Descobrir padrões: ${planos.length} ideias testadas, ${passaramValidacao.length} passaram na validação, ${confirmaram.length} confirmaram na prova final`);
   } catch (e) {
     log('erro', `Descobrir padrões: ${e.message}`);
   } finally {

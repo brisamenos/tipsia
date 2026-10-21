@@ -283,6 +283,11 @@ window.addEventListener('message',window.__lab);
       if (v.aoVivo && v.aoVivo.n >= 20) return { rotulo: 'ao vivo', ...v.aoVivo };
       return v.teste && v.teste.n ? { rotulo: 'no histórico', ...v.teste } : null;
     },
+    async salvarStop() {
+      const st = this.status.stop;
+      await api('/api/config', { method: 'POST', body: { stop_ativo: st.ativo, stop_min_sinais: st.minSinais, stop_roi_min: st.roiMin, stop_reds_seguidos: st.redsSeguidos } });
+      this.toast(st.ativo ? 'Stop automático salvo' : 'Stop automático desligado');
+    },
     async salvarTempo() {
       await api('/api/config', { method: 'POST', body: { tiros_padrao: this.status.tirosPadrao, antecedencia_seg: this.status.antecedencia } });
       this.toast('Salvo. O Descobrir padrões vai refazer a análise com ' + this.status.tirosPadrao + (this.status.tirosPadrao > 1 ? ' tiros.' : ' tiro.'));

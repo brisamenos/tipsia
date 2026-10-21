@@ -80,6 +80,7 @@ td.quebra { white-space: normal; min-width: 220px; max-width: 360px; }
 .s-aprovada { background: rgba(34,197,94,.15); color: var(--verde-claro); }
 .s-promissora { background: rgba(234,179,8,.15); color: var(--amarelo); }
 .s-ilusao { background: rgba(249,115,22,.15); color: var(--laranja); }
+.s-instavel { background: rgba(249,115,22,.15); color: var(--laranja); }
 .s-reprovada { background: rgba(220,38,38,.15); color: var(--vermelho-claro); }
 .s-amostra_pequena { background: rgba(138,155,187,.15); color: var(--suave); }
 .green { color: var(--verde-claro); font-weight: 700; }

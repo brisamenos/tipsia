@@ -133,6 +133,10 @@
             <div class="fixo"><span class="selo" :class="'s-' + (r.validacao?.status?.codigo || 'amostra_pequena')" x-text="(r.validacao?.status?.texto || 'Sem dados').split(':')[0]"></span></div>
             <div class="fixo pequeno suave" x-show="r.validacao?.teste?.porTiro && Object.keys(r.validacao.teste.porTiro).length"
               x-text="'Greens por tiro: ' + Object.entries(r.validacao?.teste?.porTiro || {}).map(([t, n]) => t + 'º: ' + n).join(' · ')"></div>
+            <div class="fixo pequeno" x-show="r.validacao?.prova?.n" :class="clsNum(r.validacao?.prova?.roi)"
+              x-text="'Prova final: ' + r.validacao?.prova?.taxa + '% · ROI ' + r.validacao?.prova?.roi + '%'"></div>
+            <div class="fixo pequeno suave" x-show="r.validacao?.dias?.total"
+              x-text="'Lucrou em ' + r.validacao?.dias?.positivos + ' de ' + r.validacao?.dias?.total + ' dias'"></div>
             <div></div>
             <div class="fixo"><select style="width:auto" :value="r.tiros || 1" @change="tirosIA(r, $event.target.value)">
               <option value="1">1 tiro</option><option value="2">2 tiros</option><option value="3">3 tiros</option></select></div>
@@ -182,7 +186,7 @@
   <div class="cartao">
     <p class="suave" style="margin:0">O sistema cria e testa sozinho centenas de ideias em <b>todos os mercados e ligas</b>:
       sequências, frequência nos últimos 10 jogos, placar e gols do jogo anterior e faixas de odd.
-      As melhores são escolhidas olhando só a <b>1ª metade</b> dos jogos (treino) e depois conferidas na <b>2ª metade</b> (teste).
+      As melhores são escolhidas pelo <b>treino</b> e pela <b>validação</b>, e conferidas na <b>prova final</b> (jogos mais recentes), além do lucro <b>dia a dia</b>.
       Usa os <b>tiros padrão</b> de Configurações (trocou lá, a análise refaz sozinha). Roda sozinho a cada 6 horas. Toque em <b>Observar</b> para acompanhar uma ideia, ou <b>Telegram</b> para receber os sinais.</p>
   </div>
 
@@ -203,30 +207,36 @@
           <div class="suave pequeno" x-text="'Com ' + (descoberta.resultado.tiros || 1) + ((descoberta.resultado.tiros || 1) > 1 ? ' tiros' : ' tiro') + ' · atualizado em ' + fmtDataHora(descoberta.resultado.em)"></div></div>
         <div class="cartao"><div class="rotulo">Lucraram no treino</div><div class="numero" x-text="descoberta.resultado.lucraramTreino"></div>
           <div class="suave pequeno">pareciam boas olhando o passado</div></div>
-        <div class="cartao"><div class="rotulo">Continuaram lucrando no teste</div><div class="numero" x-text="descoberta.resultado.continuaram"></div>
-          <div class="suave pequeno" x-text="descoberta.resultado.lucraramTreino ? Math.round(descoberta.resultado.continuaram / descoberta.resultado.lucraramTreino * 100) + '% das que pareciam boas' : ''"></div></div>
+        <div class="cartao"><div class="rotulo">Passaram na validação</div><div class="numero" x-text="descoberta.resultado.passaramValidacao ?? '-'"></div>
+          <div class="suave pequeno">continuaram lucrando nos jogos seguintes</div></div>
+        <div class="cartao"><div class="rotulo">Confirmaram na prova final</div><div class="numero" x-text="descoberta.resultado.continuaram"></div>
+          <div class="suave pequeno" x-text="descoberta.resultado.lucraramTreino ? Math.round(descoberta.resultado.continuaram / descoberta.resultado.lucraramTreino * 100) + '% das que pareciam boas · jogos mais recentes' : ''"></div></div>
         <div class="cartao"><div class="rotulo">Aprovadas</div><div class="numero" :class="descoberta.resultado.aprovadas ? 'green' : ''" x-text="descoberta.resultado.aprovadas"></div>
           <div class="suave pequeno">lucro + amostra grande + confiança</div></div>
       </div>
 
-      <div class="aviso" style="margin-top:14px">Com centenas de ideias testadas, algumas passam no teste por pura sorte. Antes de apostar,
+      <div class="aviso" style="margin-top:14px">Como funciona: as ideias são escolhidas olhando o <b>treino</b> (50% mais antigos) e a <b>validação</b> (25% seguintes).
+        A <b>prova final</b> (25% mais recentes) não é usada na escolha, só para conferir. Mesmo assim, com milhares de ideias, algumas passam por sorte. Antes de apostar,
         deixe a ideia em <b>Observar</b> e acompanhe a coluna <b>Ao vivo</b> na aba Regras por alguns dias.</div>
 
       <div class="chips" style="margin:14px 0">
-        <span class="chip" :class="abaDescoberta === 'sustentaram' && 'on'" @click="abaDescoberta = 'sustentaram'">Lucraram no treino e no teste</span>
+        <span class="chip" :class="abaDescoberta === 'sustentaram' && 'on'" @click="abaDescoberta = 'sustentaram'">Passaram no treino e na validação</span>
         <span class="chip" :class="abaDescoberta === 'ranking' && 'on'" @click="abaDescoberta = 'ranking'">Melhores do treino (o que o passado sugere)</span>
       </div>
 
       <div class="cartao rolagem">
         <table>
-          <tr><th>Ideia</th><th>Treino</th><th>Teste</th><th>Status</th><th></th></tr>
+          <tr><th>Ideia</th><th>Treino</th><th>Validação</th><th>Prova final</th><th>Dias</th><th>Status</th><th></th></tr>
           <template x-for="(r, i) in descoberta.resultado[abaDescoberta]" :key="i">
             <tr>
               <td class="quebra"><b x-text="r.nome"></b></td>
               <td><span x-text="r.treino.taxa + '%'"></span>
                 <div class="pequeno" :class="clsNum(r.treino.roi)" x-text="r.treino.n + ' entradas · ROI ' + r.treino.roi + '%'"></div></td>
-              <td><span x-text="r.teste.n ? r.teste.taxa + '%' : '-'"></span>
-                <div class="pequeno" :class="clsNum(r.teste.roi)" x-text="r.teste.n ? r.teste.n + ' entradas · ROI ' + r.teste.roi + '%' : ''"></div></td>
+              <template x-for="parte in [r.validacao || r.teste, r.prova]">
+                <td><span x-text="parte && parte.n ? parte.taxa + '%' : '-'"></span>
+                  <div class="pequeno" :class="clsNum(parte?.roi)" x-text="parte && parte.n ? parte.n + ' entradas · ROI ' + parte.roi + '%' : ''"></div></td>
+              </template>
+              <td class="pequeno" x-text="r.dias && r.dias.total ? r.dias.positivos + ' de ' + r.dias.total + ' com lucro' : '-'"></td>
               <td><span class="selo" :class="'s-' + r.status.codigo" x-text="r.status.texto.split(':')[0]"></span>
                 <div class="suave pequeno" x-show="r.teste.porTiro && Object.keys(r.teste.porTiro).length > 1"
                   x-text="'Greens por tiro: ' + Object.entries(r.teste.porTiro || {}).map(([t, n]) => t + 'º: ' + n).join(' · ')"></div></td>
@@ -345,7 +355,7 @@
           </div>
           <div class="rolagem"><table>
             <tr><th></th><th>Entradas</th><th>Acerto</th><th>Odd média</th><th>Acerto mínimo p/ empatar</th><th>Lucro (unid.)</th><th>ROI</th><th>Confiança (z)</th></tr>
-            <template x-for="[nome, s] in [['Treino (1ª metade)', resultadoTeste.treino], ['Teste (2ª metade)', resultadoTeste.teste], ['Ao vivo (sinais reais)', resultadoTeste.aoVivo], ['Apostar em todos (treino)', resultadoTeste.base.treino], ['Apostar em todos (teste)', resultadoTeste.base.teste]]">
+            <template x-for="[nome, s] in [['Treino (50% mais antigos)', resultadoTeste.treino], ['Validação (25% seguintes)', resultadoTeste.validacao], ['Prova final (25% mais recentes)', resultadoTeste.prova], ['Teste (validação + prova)', resultadoTeste.teste], ['Ao vivo (sinais reais)', resultadoTeste.aoVivo], ['Apostar em todos (treino)', resultadoTeste.base.treino], ['Apostar em todos (teste)', resultadoTeste.base.teste]]">
               <tr x-show="s">
                 <td x-text="nome"></td><td x-text="s?.n"></td><td x-text="s?.taxa != null ? s.taxa + '%' : '-'"></td>
                 <td x-text="s?.oddMedia ?? '-'"></td><td x-text="s?.taxaEquilibrio != null ? s.taxaEquilibrio + '%' : '-'"></td>
@@ -354,6 +364,8 @@
               </tr>
             </template>
           </table></div>
+          <p class="pequeno" x-show="resultadoTeste.dias && resultadoTeste.dias.total"
+            x-text="'📅 Dia a dia: lucrou em ' + resultadoTeste.dias?.positivos + ' de ' + resultadoTeste.dias?.total + ' dias (' + (resultadoTeste.dias?.lista || []).filter(d => d.n >= 3).map(d => d.dia.slice(8,10) + '/' + d.dia.slice(5,7) + ': ' + (d.lucro > 0 ? '+' : '') + d.lucro).join(' · ') + ')'"></p>
           <p class="suave pequeno">Confiança (z): acima de 2 indica que a regra acertou bem mais do que as odds previam. Perto de 0 ou negativo é sorte/azar normal.</p>
         </div>
       </template>
@@ -564,6 +576,18 @@
         </div>
         <p class="suave pequeno">Tiros: o sinal vale para até N jogos seguidos da mesma liga. Se o 1º errar, entra no 2º, e assim por diante.
           A conta de lucro considera 1 unidade por tiro. Com 1 minuto de antecedência, o jogo anterior ainda pode estar rolando; o sistema leva isso em conta no teste.</p>
+      </div>
+
+      <div class="cartao">
+        <h3>Proteção: stop automático</h3>
+        <label><input type="checkbox" style="width:auto" x-model="status.stop.ativo"> Pausar sozinha a estratégia que estiver dando prejuízo ao vivo</label>
+        <div class="linha" style="margin-top:10px">
+          <div class="fixo" style="width:200px"><label>Depois de quantos sinais</label><input type="number" min="5" max="500" x-model.number="status.stop.minSinais"></div>
+          <div class="fixo" style="width:200px"><label>Pausar se o ROI ficar abaixo de (%)</label><input type="number" min="-100" max="50" x-model.number="status.stop.roiMin"></div>
+          <div class="fixo" style="width:200px"><label>Ou após REDs seguidos (0 = não usar)</label><input type="number" min="0" max="20" x-model.number="status.stop.redsSeguidos"></div>
+          <div class="fixo"><button class="btn" @click="salvarStop()">Salvar</button></div>
+        </div>
+        <p class="suave pequeno">Vale só para estratégias no modo Telegram. Quando pausar, você recebe um aviso ⛔ no Telegram e a estratégia vai para "Pausados".</p>
       </div>
 
       <div class="cartao">

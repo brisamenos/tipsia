@@ -2,7 +2,7 @@
 const { db, getConfig, setConfig, log } = require('./db');
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
 const { avaliar, ligasDaRegra } = require('./regras');
-const { backtest } = require('./validador');
+const { backtest, aoVivo } = require('./validador');
 const jogos = require('./jogos');
 const tson = require('./tsontips');
 const tg = require('./telegram');
@@ -216,12 +216,44 @@ async function conferirResultados(novos) {
           const txt = montarMensagem({ liga, mercado: s.mercado, tiros: s.tiros_max || 1, plano, hist, final: final === 'proximo' ? null : final, meta });
           await tg.editar(s.telegram_msg_id, txt, s.chat_id);
         }
+        if (final === 'green' || final === 'red') await checarStop(s.regra_id);
       }
     }
   }
   // anula sinais que ficaram sem resultado por mais de 2 horas
   db.prepare(`UPDATE sinais SET status = 'anulado' WHERE status = 'pendente' AND COALESCE(alvo_inicio, inicio) < ?`)
     .run(new Date(Date.now() - 2 * 3600e3).toISOString());
+}
+
+// ---------- Stop automático: pausa a regra sozinha quando o resultado ao vivo fica ruim ----------
+function configStop() {
+  return {
+    ativo: getConfig('stop_ativo', true),
+    minSinais: Number(getConfig('stop_min_sinais', 20)) || 20,
+    roiMin: Number(getConfig('stop_roi_min', -15)),
+    redsSeguidos: Number(getConfig('stop_reds_seguidos', 0)) || 0,
+  };
+}
+
+async function checarStop(regraId) {
+  const cfg = configStop();
+  if (!cfg.ativo) return;
+  const regra = regraPorId.get(regraId);
+  if (!regra || regra.modo !== 'telegram') return;
+  const vivo = aoVivo(regraId);
+  let motivo = null;
+  if (vivo && vivo.n >= cfg.minSinais && vivo.roi != null && vivo.roi < cfg.roiMin) {
+    motivo = `ROI ao vivo de ${vivo.roi}% em ${vivo.n} sinais (limite: ${cfg.roiMin}%)`;
+  }
+  if (!motivo && cfg.redsSeguidos > 0) {
+    const ult = db.prepare(`SELECT status FROM sinais WHERE regra_id = ? AND status IN ('green','red')
+      ORDER BY inicio DESC LIMIT ?`).all(regraId, cfg.redsSeguidos);
+    if (ult.length === cfg.redsSeguidos && ult.every((x) => x.status === 'red')) motivo = `${cfg.redsSeguidos} REDs seguidos`;
+  }
+  if (!motivo) return;
+  db.prepare(`UPDATE regras SET modo = 'desligado' WHERE id = ?`).run(regraId);
+  log('info', `Stop automático: regra "${regra.nome}" pausada (${motivo})`);
+  await tg.enviar(`⛔ <b>STOP AUTOMÁTICO</b>\n\n📋 ${esc(regra.nome)}\n📉 ${esc(motivo)}\n\nA estratégia foi <b>pausada</b> e não envia mais sinais. Para reativar, use o painel.`);
 }
 
 // ---------- Geração de sinais ----------
@@ -436,4 +468,4 @@ function iniciar() {
   log('info', `Robô iniciado (coleta a cada ${seg}s)`);
 }
 
-module.exports = { iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };
+module.exports = { configStop, checarStop, iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };

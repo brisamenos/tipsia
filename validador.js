@@ -85,15 +85,55 @@ function simularLiga(regra, liga, tiros = 1) {
   return out;
 }
 
-function classificar(treino, teste) {
+// extra (opcional): { prova, dias } para uma classificação mais rígida
+function classificar(treino, teste, extra = {}) {
+  const { prova, dias } = extra;
   if (teste.n < 30) return { codigo: 'amostra_pequena', texto: 'Amostra pequena: ainda não dá para concluir nada' };
-  if (teste.n >= 100 && teste.roi > 0 && treino.roi > 0 && teste.z >= 2)
-    return { codigo: 'aprovada', texto: 'Aprovada: lucrou no treino e no teste, com amostra grande' };
-  if (teste.roi > 0 && treino.roi > 0)
-    return { codigo: 'promissora', texto: 'Promissora: lucro nas duas metades, mas falta amostra/confiança' };
+  const lucrou = teste.roi > 0 && treino.roi > 0;
+  const provaOk = !prova || prova.n < 15 || prova.roi > 0;
+  const diasOk = !dias || dias.total < 3 || dias.positivos / dias.total >= 0.6;
+  if (lucrou && (!provaOk || (dias && dias.total >= 3 && dias.positivos / dias.total < 0.5)))
+    return { codigo: 'instavel', texto: 'Instável: lucrou no total, mas falhou na prova final ou oscila demais entre os dias' };
+  if (teste.n >= 100 && lucrou && teste.z >= 2 && provaOk && diasOk)
+    return { codigo: 'aprovada', texto: 'Aprovada: lucrou no treino, na validação e na prova final, na maioria dos dias' };
+  if (lucrou)
+    return { codigo: 'promissora', texto: 'Promissora: lucro em todas as partes, mas falta amostra/confiança' };
   if (treino.roi > 0 && teste.roi <= 0)
     return { codigo: 'ilusao', texto: 'Ilusão: funcionou no passado e falhou nos jogos novos' };
   return { codigo: 'reprovada', texto: 'Reprovada: não supera a margem da casa' };
+}
+
+// Pontos de corte: 50% (fim do treino) e 75% (fim da validação). Os últimos 25% são a "prova final".
+function cortes(ligasLista) {
+  const ts = [];
+  for (const l of ligasLista) for (const j of jogos.daLiga(l)) ts.push(j.t);
+  if (!ts.length) return { c50: 0, c75: 0 };
+  ts.sort((a, b) => a - b);
+  return { c50: ts[Math.floor(ts.length * 0.5)], c75: ts[Math.floor(ts.length * 0.75)] };
+}
+
+// Lucro dia a dia (horário de Brasília/Fortaleza)
+function porDia(entradas) {
+  const mapa = {};
+  for (const e of entradas) {
+    const dia = new Date(e.t - 3 * 3600e3).toISOString().slice(0, 10);
+    const d = (mapa[dia] ||= { dia, n: 0, lucro: 0 });
+    d.n++;
+    d.lucro += e.lucro !== undefined ? (e.lucro || 0) : e.odd ? (e.acerto ? e.odd - 1 : -1) : 0;
+  }
+  const lista = Object.values(mapa).sort((a, b) => a.dia.localeCompare(b.dia)).map((d) => ({ ...d, lucro: +d.lucro.toFixed(2) }));
+  const validos = lista.filter((d) => d.n >= 3);
+  return { total: validos.length, positivos: validos.filter((d) => d.lucro > 0).length, lista };
+}
+
+// Separa as entradas nas 3 partes e calcula tudo
+function analisar(entradas, c50, c75) {
+  const tr = [], va = [], pr = [];
+  for (const e of entradas) (e.t < c50 ? tr : e.t < c75 ? va : pr).push(e);
+  const treino = estatisticas(tr), validacao = estatisticas(va), prova = estatisticas(pr);
+  const teste = estatisticas(va.concat(pr));
+  const dias = porDia(entradas);
+  return { treino, validacao, prova, teste, dias, status: classificar(treino, teste, { prova, dias }) };
 }
 
 // Percorre todos os jogos das ligas da regra e simula o sinal
@@ -137,20 +177,18 @@ function aoVivo(regraId) {
 function backtest(regra) {
   if (!MERCADOS[regra.mercado]) throw new Error('Mercado inválido');
   const ligasLista = ligasDaRegra(regra, Object.keys(LIGAS));
-  const corte = pontoDeCorte(ligasLista);
+  const { c50, c75 } = cortes(ligasLista);
   const entradas = simular(regra);
-  const treino = estatisticas(entradas.filter((e) => e.t < corte));
-  const teste = estatisticas(entradas.filter((e) => e.t >= corte));
+  const a = analisar(entradas, c50, c75);
   const totalJogos = ligasLista.reduce((s, l) => s + jogos.daLiga(l).length, 0);
   return {
     em: new Date().toISOString(),
     totalJogos,
-    corte: corte ? new Date(corte).toISOString() : null,
-    treino,
-    teste,
-    base: base(regra, corte),
+    corte: c50 ? new Date(c50).toISOString() : null,
+    corteProva: c75 ? new Date(c75).toISOString() : null,
+    ...a,
+    base: base(regra, c50),
     aoVivo: aoVivo(regra.id),
-    status: classificar(treino, teste),
     tiros: Math.min(3, Math.max(1, Number(regra.tiros) || 1)),
     frequencia: totalJogos ? +(entradas.length / totalJogos * 100).toFixed(2) : 0,
   };
@@ -170,4 +208,4 @@ function panorama() {
   return out;
 }
 
-module.exports = { backtest, panorama, estatisticas, classificar, simularLiga, defasagem };
+module.exports = { backtest, panorama, estatisticas, classificar, simularLiga, defasagem, cortes, analisar, porDia, aoVivo };
