@@ -37,7 +37,9 @@ if (!db.prepare('SELECT COUNT(*) AS n FROM regras').get().n) {
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '200kb' }));
+const jsonPequeno = express.json({ limit: '200kb' });
+const jsonGrande = express.json({ limit: '30mb' });
+app.use((req, res, next) => (req.path === '/api/ingest' ? jsonGrande : jsonPequeno)(req, res, next));
 
 let segredo = process.env.SESSION_SECRET;
 if (!segredo) {
@@ -91,6 +93,12 @@ app.get('/estilo.css', (req, res) => res.sendFile(path.join(PUB, 'estilo.css')))
 app.use(exigeLogin);
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(PUB, 'index.html')));
 app.get('/app.js', (req, res) => res.sendFile(path.join(PUB, 'app.js')));
+app.get('/coletor.html', (req, res) => res.sendFile(path.join(PUB, 'coletor.html')));
+app.get('/api/ingest/plano', (req, res) => res.json({ caminho: robo.caminhoColeta(robo.periodoAtual()), intervalo: 60 }));
+app.post('/api/ingest', async (req, res) => {
+  try { res.json({ ok: true, ...(await robo.receber(req.body)) }); }
+  catch (e) { res.status(400).json({ erro: e.message }); }
+});
 app.get('/conectar.html', (req, res) => res.sendFile(path.join(PUB, 'conectar.html')));
 
 app.get('/api/me', (req, res) => res.json({ usuario: req.session.usuario }));

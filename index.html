@@ -27,8 +27,8 @@
   <h2>Visão geral</h2>
   <template x-if="status">
     <div>
-      <div class="erro" x-show="!status.sessao.configurada" style="margin-bottom:14px">
-        A sessão do TsonTips ainda não foi conectada. Vá em <b>Configurações</b> e cole o cookie.
+      <div class="erro" x-show="!status.robo.ultimaColeta && !status.robo.ultimoErro" style="margin-bottom:14px">
+        O coletor ainda não rodou. Vá em <b>Configurações</b> e siga os passos para conectar o TsonTips.
       </div>
       <div class="erro" x-show="status.robo.ultimoErro" style="margin-bottom:14px">
         <b>Último erro da coleta:</b> <span x-text="status.robo.ultimoErro"></span>
@@ -413,35 +413,15 @@
     <div>
       <div class="cartao">
         <h3>Conexão com o TsonTips</h3>
-        <p :class="status.sessao.configurada ? 'ok' : 'erro'" style="margin-top:0"
-          x-text="status.sessao.configurada ? 'Conectado' + (status.sessao.usuario ? ' como ' + status.sessao.usuario : '') + '. A conexão se renova sozinha.' : 'Não conectado'"></p>
-
-        <p style="margin-bottom:6px"><b>Conectar com 1 toque</b></p>
-        <p class="suave pequeno" style="margin-top:0">O login do TsonTips tem verificação anti-robô, então o sistema não pode entrar sozinho com e-mail e senha.
-          Em vez disso, você faz login no site normalmente e toca no favorito abaixo. Ele passa a sessão para cá.</p>
-
-        <div class="campo"><label>No computador</label>
-          <ol class="suave pequeno" style="margin:4px 0 10px">
-            <li>Arraste este botão para a barra de favoritos: <a class="btn peq" :href="linkConectar()" @click.prevent="toast('Arraste o botão para a barra de favoritos')" style="text-decoration:none">Conectar ao Lab Sinais</a></li>
-            <li>Entre no TsonTips e faça login.</li>
-            <li>Clique no favorito <b>Conectar ao Lab Sinais</b>. Abre uma janela confirmando a conexão.</li>
-          </ol>
-        </div>
-        <div class="campo"><label>No celular (Chrome)</label>
-          <ol class="suave pequeno" style="margin:4px 0 10px">
-            <li>Toque em <button class="btn sec peq" @click="copiarLink()">Copiar código do favorito</button></li>
-            <li>No Chrome, salve qualquer página nos favoritos (⋮ → ☆). Depois edite esse favorito: nome <b>labsinais</b> e, no endereço, apague tudo e cole o código.</li>
-            <li>Entre no TsonTips e faça login. Na barra de endereço, digite <b>labsinais</b> e toque no favorito que aparecer.</li>
-          </ol>
-        </div>
-
-        <details class="suave pequeno"><summary>Avançado: colar o cookie manualmente</summary>
-          <div style="margin-top:10px">
-            <div class="campo"><label>Cookie sb-supabase-auth-token</label><textarea x-model="cfg.cookie" placeholder="base64-..."></textarea></div>
-            <div class="campo"><label>Cookie _ch (opcional)</label><input x-model="cfg.ch"></div>
-            <button class="btn" @click="salvarSessao()" :disabled="!cfg.cookie">Conectar</button>
-          </div>
-        </details>
+        <p :class="status.robo.ultimaColeta ? 'ok' : 'erro'" style="margin-top:0"
+          x-text="status.robo.ultimaColeta ? 'Coletando. Última coleta recebida com sucesso.' : 'Coletor parado'"></p>
+        <p class="suave pequeno" style="margin-top:0">O TsonTips só aceita a sessão no seu computador, então a coleta roda no seu navegador e envia os jogos para cá.</p>
+        <ol class="suave pequeno" style="margin:4px 0 10px">
+          <li>Arraste este botão para a barra de favoritos: <a class="btn peq" :href="linkConectar()" @click.prevent="toast('Arraste o botão para a barra de favoritos')" style="text-decoration:none">Lab Sinais</a></li>
+          <li>Entre no TsonTips e faça login.</li>
+          <li>Com o TsonTips aberto, clique no favorito <b>Lab Sinais</b>. Abre uma janela pequena do coletor.</li>
+          <li>Deixe <b>as duas abas abertas</b> (pode minimizar). Se recarregar a aba do TsonTips, clique no favorito de novo.</li>
+        </ol>
       </div>
 
       <div class="cartao">

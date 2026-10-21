@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coletor · Lab Sinais</title>
+  <link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+  <div class="login-caixa cartao" style="max-width:440px">
+    <div class="logo" style="font-size:20px;margin-bottom:8px">LAB <span>SINAIS</span></div>
+    <div id="status" class="aviso">Iniciando coletor...</div>
+    <p class="suave pequeno">Deixe esta janela e a aba do TsonTips abertas. A cada minuto os jogos novos são enviados ao painel.</p>
+    <p class="suave pequeno" id="log"></p>
+  </div>
+  <script>
+    const ORIGEM_TSON = 'https://tsontips.com.br';
+    const st = document.getElementById('status');
+    const lg = document.getElementById('log');
+    const pendentes = new Map();
+    let n = 0;
+    const msg = (t, cls) => { st.className = cls; st.textContent = t; };
+
+    window.addEventListener('message', (e) => {
+      if (e.origin !== ORIGEM_TSON) return;
+      const d = e.data || {};
+      if (d.tipo !== 'dados' || !pendentes.has(d.id)) return;
+      pendentes.get(d.id)(d);
+      pendentes.delete(d.id);
+    });
+
+    function pedir(caminho) {
+      return new Promise((ok, erro) => {
+        if (!window.opener || window.opener.closed) return erro(new Error('A aba do TsonTips foi fechada. Abra o TsonTips e toque no favorito de novo.'));
+        const id = ++n;
+        const t = setTimeout(() => { pendentes.delete(id); erro(new Error('A aba do TsonTips não respondeu. Toque no favorito de novo.')); }, 45000);
+        pendentes.set(id, (d) => { clearTimeout(t); ok(d); });
+        window.opener.postMessage({ tipo: 'pedir', id, caminho }, ORIGEM_TSON);
+      });
+    }
+
+    async function ciclo() {
+      try {
+        const pr = await fetch('/api/ingest/plano');
+        if (pr.status === 401) throw new Error('Faça login no painel e abra o favorito de novo.');
+        const plano = await pr.json();
+        const d = await pedir(plano.caminho);
+        if (d.status === 401 || d.status === 403) throw new Error(`TsonTips recusou (${d.status}). Faça login no TsonTips e toque no favorito de novo.`);
+        if (d.status !== 200) throw new Error(`TsonTips respondeu ${d.status || 'erro'}: ${String(d.texto).slice(0, 120)}`);
+        const r = await fetch('/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: d.texto });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.erro || 'Falha ao enviar ao painel');
+        msg('Coletando. Última: ' + new Date().toLocaleTimeString('pt-BR'), 'ok');
+        lg.textContent = `Jogos novos na última coleta: ${j.novos}`;
+      } catch (e) { msg(e.message, 'erro'); }
+    }
+    ciclo();
+    setInterval(ciclo, 60000);
+  </script>
+</body>
+</html>

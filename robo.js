@@ -50,8 +50,16 @@ const inserir = db.prepare(`INSERT OR IGNORE INTO jogos
   (id, liga, inicio, hora, minuto, time_casa, time_fora, gc, gf, gc_ht, gf_ht, odds)
   VALUES (@id, @liga, @inicio, @hora, @minuto, @time_casa, @time_fora, @gc, @gf, @gc_ht, @gf_ht, @odds)`);
 
-async function coletar(periodo = '1h') {
-  const dados = await tson.api(`/api/matches/all?period=${periodo}&leagues=${LISTA_LIGAS.join(',')}&stale=1`);
+const caminhoColeta = (periodo) => `/api/matches/all?period=${periodo}&leagues=${LISTA_LIGAS.join(',')}&stale=1`;
+
+function periodoAtual() {
+  const total = db.prepare('SELECT COUNT(*) AS n FROM jogos').get().n;
+  const parado = !estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 50 * 60000;
+  return total < 200 ? '120h' : parado ? '24h' : '1h';
+}
+
+// Recebe a resposta do TsonTips (vinda do navegador ou do servidor) e grava os jogos novos
+function processar(dados) {
   const novos = [];
   const agora = Date.now();
   for (const [liga, bloco] of Object.entries(dados.leagues || {})) {
@@ -199,34 +207,72 @@ async function talvezRelatorio() {
 }
 
 // ---------- Laço principal ----------
-async function ciclo() {
+async function aposColeta(novos, periodo) {
+  estado.ultimaColeta = new Date().toISOString();
+  estado.ultimoErro = null;
+  if (getConfig('tson_alerta_enviado')) setConfig('tson_alerta_enviado', false);
+  if (periodo !== '1h') log('info', `Coleta (${periodo}): ${novos.length} jogos novos`);
+  if (novos.length) {
+    await conferirResultados(novos);
+    if (periodo !== '1h') revalidarTodas();
+  }
+  await gerarSinais();
+  await talvezRelatorio();
+}
+
+// Coleta feita no navegador (o TsonTips só aceita a sessão no seu aparelho/IP)
+async function receber(dados) {
+  if (!dados || typeof dados !== 'object' || !dados.leagues) throw new Error('Resposta do TsonTips sem dados de jogos');
+  if (estado.rodando) throw new Error('Painel ocupado, tente de novo em instantes');
+  estado.rodando = true;
+  try {
+    const periodo = periodoAtual();
+    const novos = processar(dados);
+    await aposColeta(novos, periodo);
+    return { novos: novos.length };
+  } catch (e) {
+    estado.ultimoErro = e.message;
+    log('erro', `Coleta: ${e.message}`);
+    throw e;
+  } finally {
+    estado.rodando = false;
+  }
+}
+
+// Modo antigo (o servidor busca sozinho). Só funciona se o TsonTips aceitar o IP do servidor.
+async function cicloServidor() {
   if (estado.rodando) return;
   estado.rodando = true;
   try {
-    const total = db.prepare('SELECT COUNT(*) AS n FROM jogos').get().n;
-    const parado = !estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 50 * 60000;
-    const periodo = total < 200 ? '120h' : parado ? '24h' : '1h';
-    const novos = await coletar(periodo);
-    estado.ultimaColeta = new Date().toISOString();
-    estado.ultimoErro = null;
-    if (getConfig('tson_alerta_enviado')) setConfig('tson_alerta_enviado', false);
-    if (periodo !== '1h') log('info', `Coleta (${periodo}): ${novos.length} jogos novos`);
-    if (novos.length) {
-      await conferirResultados(novos);
-      if (periodo !== '1h') revalidarTodas();
-    }
-    await gerarSinais();
-    await talvezRelatorio();
+    const periodo = periodoAtual();
+    const novos = processar(await tson.api(caminhoColeta(periodo)));
+    await aposColeta(novos, periodo);
   } catch (e) {
     estado.ultimoErro = e.message;
     log('erro', `Coleta: ${e.message}`);
     if (e instanceof tson.SessaoExpirada && !getConfig('tson_alerta_enviado')) {
       setConfig('tson_alerta_enviado', true);
-      await tg.enviar('⚠️ <b>A sessão do TsonTips caiu.</b>\nFaça login no TsonTips e cole o cookie novo no painel, em Configurações. Até lá, não há coleta nem sinais.');
+      await tg.enviar('⚠️ <b>A sessão do TsonTips caiu.</b>');
     }
   } finally {
     estado.rodando = false;
   }
+}
+
+// Vigia o coletor do navegador e avisa se ele parar
+async function ciclo() {
+  if (process.env.COLETA_SERVIDOR === '1') return cicloServidor();
+  try {
+    const parado = !estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 10 * 60000;
+    if (parado) {
+      estado.ultimoErro = 'Coletor parado. Abra o TsonTips (logado) e toque no favorito Lab Sinais.';
+      if (estado.ultimaColeta && !getConfig('tson_alerta_enviado')) {
+        setConfig('tson_alerta_enviado', true);
+        await tg.enviar('⚠️ <b>O coletor parou.</b>\nAbra o TsonTips (logado) e toque no favorito Lab Sinais. Até lá, não há coleta nem sinais.');
+      }
+    }
+    await talvezRelatorio();
+  } catch (e) { log('erro', `Vigia: ${e.message}`); }
 }
 
 function iniciar() {
@@ -248,4 +294,4 @@ function iniciar() {
   log('info', `Robô iniciado (coleta a cada ${seg}s)`);
 }
 
-module.exports = { iniciar, ciclo, estado, revalidarTodas, textoRelatorio, proximas };
+module.exports = { iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };
