@@ -87,74 +87,161 @@ function processar(dados) {
 }
 
 // ---------- Resultados dos sinais ----------
-const pendentesDoJogo = db.prepare(`SELECT * FROM sinais WHERE status = 'pendente' AND liga = ? AND inicio = ?`);
-const fecharSinal = db.prepare(`UPDATE sinais SET status = ?, placar = ?, lucro = ? WHERE id = ?`);
+// ---------- Mensagem do sinal ----------
+function textoSinal(s, regra, extra = '') {
+  const v = regra && regra.validacao;
+  const aoVivo = v && v.aoVivo && v.aoVivo.n >= 20 ? v.aoVivo : null;
+  const teste = v && v.teste && v.teste.n ? v.teste : null;
+  const tiros = s.tiros_max || 1;
+  let t = `🔔 <b>SINAL · Kiron ${esc(LIGAS[s.liga])}</b>\n` +
+    `⚽ ${esc(s.time_casa)} x ${esc(s.time_fora)}\n` +
+    `🕐 Entrada: <b>${hhmm(s.inicio)}</b>` + (tiros > 1 ? ` (até ${tiros} tiros)` : '') + '\n' +
+    `🎯 <b>${esc(MERCADOS[s.mercado].nome)}</b>` + (s.odd ? ` · odd <b>${Number(s.odd).toFixed(2)}</b>` : '') + '\n';
+  if (aoVivo) t += `📊 Assertividade ao vivo: <b>${aoVivo.taxa}%</b> (${aoVivo.n} sinais)\n`;
+  else if (teste) t += `📊 Assertividade no histórico: <b>${teste.taxa}%</b> (${teste.n} sinais` + (tiros > 1 ? `, com ${tiros} tiros` : '') + ')\n';
+  t += `📋 ${esc(regra ? regra.nome : '')}`;
+  return t + extra;
+}
+
+function linhasHistorico(hist, final) {
+  let t = '\n━━━━━━━━━━━━━━━';
+  for (const h of hist) {
+    const placar = `${esc(h.casa)} ${h.gc}x${h.gf} ${esc(h.fora)}`;
+    t += h.ok
+      ? `\n✅ <b>GREEN${h.tiro > 1 ? ` no ${h.tiro}º tiro` : ''}</b> · ${hhmm(h.inicio)} · ${placar}` + (h.odd ? ` · odd ${Number(h.odd).toFixed(2)}` : '')
+      : `\n❌ ${h.tiro}º tiro · ${hhmm(h.inicio)} · ${placar}` + (h.odd ? ` · odd ${Number(h.odd).toFixed(2)}` : '');
+  }
+  if (final === 'red') t += '\n🔴 <b>RED</b>';
+  else if (final === 'proximo') t += `\n⏭️ Indo para o ${hist.length + 1}º tiro`;
+  return t;
+}
+
+// ---------- Resultados dos sinais (com tiros) ----------
+const pendentesDaLiga = db.prepare(`SELECT * FROM sinais WHERE status = 'pendente' AND liga = ?`);
+const atualizarSinal = db.prepare(`UPDATE sinais SET status = @status, placar = @placar, lucro = @lucro,
+  tiro_atual = @tiro_atual, tiro_green = @tiro_green, alvo_inicio = @alvo_inicio, odd_atual = @odd_atual, historico = @historico WHERE id = @id`);
+const regraPorId = db.prepare('SELECT * FROM regras WHERE id = ?');
+
+function proximoJogoDepois(liga, t) {
+  const p = (proximas.get(liga) || []).find((x) => x.t > t);
+  if (p) return p;
+  const arr = jogos.daLiga(liga);
+  const iv = jogos.intervaloTipico(arr);
+  return { inicio: new Date(t + iv).toISOString(), t: t + iv, estimado: true, odds: {} };
+}
 
 async function conferirResultados(novos) {
-  for (const j of novos) {
-    for (const s of pendentesDoJogo.all(j.liga, j.inicio)) {
-      const ok = bateu(j, s.mercado);
-      const lucro = s.odd ? +(ok ? s.odd - 1 : -1).toFixed(2) : null;
-      fecharSinal.run(ok ? 'green' : 'red', `${j.gc}-${j.gf}`, lucro, s.id);
-      if (s.enviado) {
-        const txt = `${ok ? '✅ <b>GREEN</b>' : '❌ <b>RED</b>'} · ${esc(LIGAS[j.liga])} ${hhmm(j.inicio)}\n` +
-          `${esc(j.time_casa)} ${j.gc} x ${j.gf} ${esc(j.time_fora)}` +
-          (j.gc_ht != null ? ` (1ºT ${j.gc_ht}-${j.gf_ht})` : '') +
-          `\n🎯 ${esc(MERCADOS[s.mercado].nome)}` + (lucro != null ? ` · ${lucro > 0 ? '+' : ''}${lucro.toFixed(2)} unid.` : '');
-        await tg.enviar(txt, { responderA: s.telegram_msg_id });
+  const porLiga = {};
+  for (const j of novos) (porLiga[j.liga] ||= []).push(j);
+  for (const [liga, lista] of Object.entries(porLiga)) {
+    lista.sort((a, b) => a.t - b.t);
+    for (const j of lista) {
+      for (const s of pendentesDaLiga.all(liga)) {
+        const alvo = s.alvo_inicio || s.inicio;
+        const tiro = s.tiro_atual || 1;
+        const hist = s.historico ? JSON.parse(s.historico) : [];
+        // 1º tiro: precisa ser exatamente o jogo do sinal; tiros seguintes: o primeiro jogo depois do anterior
+        const ehAlvo = tiro === 1 || !hist.length ? j.inicio === alvo
+          : j.t > Date.parse(hist[hist.length - 1].inicio) && j.t <= Date.parse(alvo) + 90000;
+        if (!ehAlvo) continue;
+        const odd = oddDo(j, s.mercado) || (tiro === 1 ? s.odd : null);
+        const ok = bateu(j, s.mercado);
+        hist.push({ tiro, inicio: j.inicio, casa: j.time_casa, fora: j.time_fora, gc: j.gc, gf: j.gf, odd, ok });
+        const perdas = hist.filter((h) => !h.ok).length;
+        const semOdd = hist.some((h) => !h.odd);
+        let final, prox = null;
+        if (ok) final = 'green';
+        else if (tiro < (s.tiros_max || 1)) { final = 'proximo'; prox = proximoJogoDepois(liga, j.t); }
+        else final = 'red';
+        const lucro = final === 'proximo' || semOdd ? null : +((ok ? odd - 1 : 0) - perdas).toFixed(2);
+        atualizarSinal.run({
+          id: s.id,
+          status: final === 'proximo' ? 'pendente' : final,
+          placar: `${j.gc}-${j.gf}`,
+          lucro,
+          tiro_atual: final === 'proximo' ? tiro + 1 : tiro,
+          tiro_green: ok ? tiro : null,
+          alvo_inicio: prox ? prox.inicio : alvo,
+          odd_atual: prox ? oddDo(prox, s.mercado) : odd,
+          historico: JSON.stringify(hist),
+        });
+        if (s.enviado && s.telegram_msg_id) {
+          const base = s.texto || textoSinal(s, null);
+          await tg.editar(s.telegram_msg_id, base + linhasHistorico(hist, final), s.chat_id);
+        }
       }
     }
   }
   // anula sinais que ficaram sem resultado por mais de 2 horas
-  db.prepare(`UPDATE sinais SET status = 'anulado' WHERE status = 'pendente' AND inicio < ?`)
+  db.prepare(`UPDATE sinais SET status = 'anulado' WHERE status = 'pendente' AND COALESCE(alvo_inicio, inicio) < ?`)
     .run(new Date(Date.now() - 2 * 3600e3).toISOString());
 }
 
 // ---------- Geração de sinais ----------
 const inserirSinal = db.prepare(`INSERT OR IGNORE INTO sinais
-  (regra_id, liga, inicio, time_casa, time_fora, mercado, odd) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-const marcarEnviado = db.prepare(`UPDATE sinais SET enviado = 1, telegram_msg_id = ? WHERE id = ?`);
+  (regra_id, liga, inicio, time_casa, time_fora, mercado, odd, tiros_max, tiro_atual, alvo_inicio)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`);
+const marcarEnviado = db.prepare(`UPDATE sinais SET enviado = 1, telegram_msg_id = ?, texto = ?, chat_id = ? WHERE id = ?`);
+const temPendente = db.prepare(`SELECT 1 FROM sinais WHERE regra_id = ? AND liga = ? AND status = 'pendente' LIMIT 1`);
 
 function regrasAtivas() {
-  return db.prepare(`SELECT * FROM regras WHERE modo != 'desligado'`).all().map((r) => ({
+  return db.prepare(`SELECT * FROM regras WHERE modo IN ('observacao','telegram')`).all().map((r) => ({
     ...r, ligas: JSON.parse(r.ligas), condicoes: JSON.parse(r.condicoes), validacao: r.validacao ? JSON.parse(r.validacao) : null,
   }));
 }
 
+// aprende quantos jogos ficam "no escuro" em cada liga, para o histórico simular igual ao ao vivo
+function registrarDefasagem(liga, d) {
+  const c = getConfig('defasagem_' + liga) || {};
+  const obj = typeof c === 'object' ? c : {};
+  obj[d] = (obj[d] || 0) + 1;
+  const tot = Object.values(obj).reduce((a, b) => a + b, 0);
+  if (tot > 200) for (const k of Object.keys(obj)) obj[k] = Math.round(obj[k] / 2);
+  setConfig('defasagem_' + liga, obj);
+}
+
+const avisosBloqueio = new Map();
 async function gerarSinais() {
   const regras = regrasAtivas();
   if (!regras.length) return;
-  const exigirAprovacao = getConfig('exigir_aprovacao', true);
+  if (!estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 90000) return; // dados velhos
+  const exigirTeste = getConfig('exigir_aprovacao_teste', false);
+  const antec = Math.max(30, Number(getConfig('antecedencia_seg', 60))) * 1000;
   const agora = Date.now();
   for (const liga of LISTA_LIGAS) {
     const hist = jogos.daLiga(liga);
-    if (!hist.length) continue;
+    if (hist.length < 30) continue;
     const ultimo = hist[hist.length - 1];
-    const intervalo = jogos.intervaloTipico(hist);
-    const alvo = (proximas.get(liga) || []).find((p) => p.t > ultimo.t);
-    if (!alvo || alvo.t - ultimo.t > intervalo * 1.6 || alvo.t - agora < 10000) continue;
+    const iv = jogos.intervaloTipico(hist);
+    // próximo jogo que começa daqui a ~1 minuto (antecedência configurada)
+    const alvo = (proximas.get(liga) || []).find((p) => p.t - agora >= Math.min(antec, 40000) && p.t > ultimo.t);
+    if (!alvo || alvo.t - agora > antec + 45000) continue;
+    const d = Math.round((alvo.t - ultimo.t) / iv) - 1;
+    if (d < 0 || d > 2) continue;
     if (ultimoAvaliado.get(liga) === alvo.inicio) continue;
     ultimoAvaliado.set(liga, alvo.inicio);
+    registrarDefasagem(liga, d);
 
-    const janela = hist.slice(-60);
     for (const regra of regras) {
       if (!ligasDaRegra(regra, LISTA_LIGAS).includes(liga)) continue;
-      if (!avaliar(regra, janela, alvo)) continue;
+      if (temPendente.get(regra.id, liga)) continue;          // ainda nos tiros do sinal anterior
+      if (!avaliar(regra, hist, alvo)) continue;
       const odd = oddDo(alvo, regra.mercado);
-      const r = inserirSinal.run(regra.id, liga, alvo.inicio, alvo.time_casa, alvo.time_fora, regra.mercado, odd);
-      if (!r.changes) continue;
+      const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
+      const r = inserirSinal.run(regra.id, liga, alvo.inicio, alvo.time_casa, alvo.time_fora, regra.mercado, odd, tiros, alvo.inicio);
+      if (!r.changes || regra.modo !== 'telegram') continue;
       const aprovada = regra.validacao && regra.validacao.status && regra.validacao.status.codigo === 'aprovada';
-      if (regra.modo !== 'telegram' || (exigirAprovacao && !aprovada)) continue;
-
-      const v = regra.validacao && regra.validacao.teste;
-      const txt = `🔔 <b>SINAL · Kiron ${esc(LIGAS[liga])}</b>\n` +
-        `⚽ ${esc(alvo.time_casa)} x ${esc(alvo.time_fora)}\n` +
-        `🕐 ${hhmm(alvo.inicio)}\n` +
-        `🎯 <b>${esc(MERCADOS[regra.mercado].nome)}</b>` + (odd ? ` · odd ${odd.toFixed(2)}` : '') + '\n' +
-        `📋 ${esc(regra.nome)}` +
-        (v && v.n ? `\n📊 No teste: ${v.taxa}% de acerto em ${v.n} entradas (ROI ${v.roi}%)` : '');
+      if (exigirTeste && !aprovada) {
+        if (Date.now() - (avisosBloqueio.get(regra.id) || 0) > 3600e3) {
+          avisosBloqueio.set(regra.id, Date.now());
+          log('info', `Sinal da regra "${regra.nome}" não enviado: ela não está aprovada no teste (opção ligada em Configurações)`);
+        }
+        continue;
+      }
+      const s = { liga, inicio: alvo.inicio, time_casa: alvo.time_casa, time_fora: alvo.time_fora, mercado: regra.mercado, odd, tiros_max: tiros };
+      const txt = textoSinal(s, regra);
       const msgId = await tg.enviar(txt);
-      if (msgId) marcarEnviado.run(msgId, r.lastInsertRowid);
+      if (msgId) marcarEnviado.run(msgId, txt, String(tg.chatId()), r.lastInsertRowid);
     }
   }
 }

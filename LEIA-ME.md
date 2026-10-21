@@ -95,3 +95,17 @@ A coluna **Ao vivo** mostra o resultado real dos sinais gerados depois que a reg
 - O futebol virtual é sorteado por algoritmo, e as odds já trazem margem da casa (cerca de 7% na Kiron). É esperado que quase todas as regras sejam reprovadas. O painel existe para mostrar isso com números, não para garantir lucro.
 - A coleta usa a sua conta do TsonTips. As respostas deles carregam uma marca ligada à conta, e uso automatizado pode ir contra os termos do site.
 - Aposte só o que pode perder. Se sentir que está perdendo o controle, procure ajuda (por exemplo, Jogadores Anônimos).
+
+## IA Sinais (OpenAI)
+
+1. Na aba **IA Sinais**, cole a API Key da OpenAI (ou use a variável `OPENAI_API_KEY` no servidor) e salve.
+2. Toque em **Pedir sinais à IA** (pode escrever um pedido, ex.: "foque em over na Inglaterra").
+3. As sugestões aparecem em **Aguardando aprovação**, com a assertividade calculada pelo sistema no histórico real.
+4. **Aprovar (Telegram)** começa a enviar. Depois dá para **Pausar**, **Reativar** ou **Excluir**.
+
+## Tiros e antecedência
+
+- Cada regra tem de 1 a 3 tiros. Se o 1º jogo errar, o sinal segue para o próximo jogo da mesma liga.
+- O sinal sai cerca de 1 minuto antes do jogo (ajustável em Configurações → Envio dos sinais).
+- A mensagem no Telegram é editada a cada tiro: ❌ tiro perdido, ✅ GREEN (com horário, jogo, placar e odd) ou 🔴 RED.
+- Mais tiros aumentam a % de acerto, mas cada tiro é uma aposta a mais: olhe sempre o ROI, não só a %.

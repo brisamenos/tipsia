@@ -68,6 +68,23 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
+// ---------- Migrações (colunas novas, sem apagar nada) ----------
+function addCol(tabela, coluna, def) {
+  const cols = db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name);
+  if (!cols.includes(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${def}`);
+}
+addCol('regras', 'tiros', 'INTEGER DEFAULT 1');
+addCol('regras', 'origem', "TEXT DEFAULT 'manual'");   // manual | descoberta | ia
+addCol('regras', 'justificativa', 'TEXT');
+addCol('sinais', 'tiros_max', 'INTEGER DEFAULT 1');
+addCol('sinais', 'tiro_atual', 'INTEGER DEFAULT 1');
+addCol('sinais', 'tiro_green', 'INTEGER');
+addCol('sinais', 'alvo_inicio', 'TEXT');               // jogo do tiro atual
+addCol('sinais', 'historico', 'TEXT');                 // JSON com o resultado de cada tiro
+addCol('sinais', 'texto', 'TEXT');                     // texto original da mensagem no Telegram
+addCol('sinais', 'chat_id', 'TEXT');
+addCol('sinais', 'odd_atual', 'REAL');
+
 function getConfig(chave, padrao = null) {
   const r = db.prepare('SELECT valor FROM config WHERE chave = ?').get(chave);
   if (!r) return padrao;

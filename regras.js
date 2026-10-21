@@ -99,7 +99,7 @@ function validarEstrutura(r) {
     if (!TIPOS_CONDICAO[c.tipo]) erros.push('Tipo de condição inválido.');
     if ((c.tipo === 'sequencia' || c.tipo === 'frequencia') && !MERCADOS[c.mercado]) erros.push('Escolha o mercado da condição.');
   }
-  if (!['desligado', 'observacao', 'telegram'].includes(r.modo || 'observacao')) erros.push('Modo inválido.');
+  if (!['desligado', 'observacao', 'telegram', 'pendente'].includes(r.modo || 'observacao')) erros.push('Modo inválido.');
   return erros;
 }
 

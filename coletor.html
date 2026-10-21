@@ -10,7 +10,7 @@
   <div class="login-caixa cartao" style="max-width:440px">
     <div class="logo" style="font-size:20px;margin-bottom:8px">LAB <span>SINAIS</span></div>
     <div id="status" class="aviso">Iniciando coletor...</div>
-    <p class="suave pequeno">Deixe esta janela e a aba do TsonTips abertas. A cada minuto os jogos novos são enviados ao painel.</p>
+    <p class="suave pequeno">Deixe esta janela e a aba do TsonTips abertas. A cada 30 segundos os jogos novos são enviados ao painel.</p>
     <p class="suave pequeno" id="log"></p>
   </div>
   <script>
@@ -55,7 +55,7 @@
       } catch (e) { msg(e.message, 'erro'); }
     }
     ciclo();
-    setInterval(ciclo, 60000);
+    setInterval(ciclo, 30000);
   </script>
 </body>
 </html>

@@ -15,6 +15,7 @@ const tson = require('./tsontips');
 const tg = require('./telegram');
 const robo = require('./robo');
 const descobrir = require('./descobrir');
+const iaSinais = require('./iasinais');
 
 // ---------- Usuário inicial ----------
 if (!db.prepare('SELECT COUNT(*) AS n FROM usuarios').get().n) {
@@ -128,7 +129,9 @@ app.get('/api/status', (req, res) => {
     robo: robo.estado,
     sessao: tson.infoSessao(),
     telegram: { token: !!process.env.TELEGRAM_BOT_TOKEN, chatId: tg.chatId() || null },
-    exigirAprovacao: getConfig('exigir_aprovacao', true),
+    exigirAprovacao: getConfig('exigir_aprovacao_teste', false),
+    tirosPadrao: getConfig('tiros_padrao', 1),
+    antecedencia: getConfig('antecedencia_seg', 60),
     totalJogos: porLiga.reduce((s, l) => s + l.n, 0),
     porLiga,
     sinais,
@@ -151,6 +154,8 @@ function lerRegra(body) {
     mercado: body.mercado,
     condicoes: Array.isArray(body.condicoes) ? body.condicoes : [],
     modo: body.modo || 'observacao',
+    tiros: Math.min(3, Math.max(1, Number(body.tiros) || Number(getConfig('tiros_padrao', 1)) || 1)),
+    origem: ['manual', 'descoberta', 'ia'].includes(body.origem) ? body.origem : 'manual',
   };
 }
 
@@ -165,8 +170,8 @@ app.post('/api/regras', (req, res) => {
   const r = lerRegra(req.body);
   const erros = validarEstrutura(r);
   if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
-  const info = db.prepare('INSERT INTO regras (nome, ligas, mercado, condicoes, modo) VALUES (?, ?, ?, ?, ?)')
-    .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo);
+  const info = db.prepare('INSERT INTO regras (nome, ligas, mercado, condicoes, modo, tiros, origem) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo, r.tiros, r.origem);
   const v = backtest({ ...r, id: info.lastInsertRowid });
   db.prepare('UPDATE regras SET validacao = ? WHERE id = ?').run(JSON.stringify(v), info.lastInsertRowid);
   res.json(regraDaLinha(db.prepare('SELECT * FROM regras WHERE id = ?').get(info.lastInsertRowid)));
@@ -178,8 +183,12 @@ app.put('/api/regras/:id', (req, res) => {
   const r = lerRegra({ ...regraDaLinha(atual), ...req.body });
   const erros = validarEstrutura(r);
   if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
-  db.prepare('UPDATE regras SET nome = ?, ligas = ?, mercado = ?, condicoes = ?, modo = ? WHERE id = ?')
-    .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo, atual.id);
+  db.prepare('UPDATE regras SET nome = ?, ligas = ?, mercado = ?, condicoes = ?, modo = ?, tiros = ?, origem = ? WHERE id = ?')
+    .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo, r.tiros, r.origem, atual.id);
+  // só mudou o modo (aprovar, pausar...): não precisa testar de novo
+  if (Object.keys(req.body).every((k) => k === 'modo')) {
+    return res.json(regraDaLinha(db.prepare('SELECT * FROM regras WHERE id = ?').get(atual.id)));
+  }
   const v = backtest({ ...r, id: atual.id });
   db.prepare('UPDATE regras SET validacao = ? WHERE id = ?').run(JSON.stringify(v), atual.id);
   res.json(regraDaLinha(db.prepare('SELECT * FROM regras WHERE id = ?').get(atual.id)));
@@ -224,11 +233,32 @@ app.get('/api/ia/:mercado', (req, res) => {
   catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// ---------- IA Sinais (OpenAI) ----------
+app.get('/api/ia-sinais', (req, res) => {
+  const regras = db.prepare(`SELECT * FROM regras WHERE origem = 'ia' ORDER BY id DESC`).all().map(regraDaLinha);
+  res.json({ ...iaSinais.situacao(), regras });
+});
+app.post('/api/ia-sinais/config', (req, res) => {
+  const b = req.body || {};
+  if (b.chave !== undefined && String(b.chave).trim()) setConfig('openai_key', String(b.chave).trim());
+  if (b.apagarChave) setConfig('openai_key', null);
+  if (b.modelo !== undefined) setConfig('openai_modelo', String(b.modelo).trim() || null);
+  if (b.qtd !== undefined) setConfig('ia_qtd', Math.min(10, Math.max(1, Number(b.qtd) || 5)));
+  if (b.auto !== undefined) setConfig('ia_auto', !!b.auto);
+  res.json({ ok: true });
+});
+app.post('/api/ia-sinais/sugerir', async (req, res) => {
+  try { res.json(await iaSinais.sugerir((req.body || {}).pedido || '')); }
+  catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 // ---------- Configurações ----------
 app.post('/api/config', (req, res) => {
   const b = req.body || {};
   if (b.telegram_chat_id !== undefined) setConfig('telegram_chat_id', String(b.telegram_chat_id || '').trim() || null);
-  if (b.exigir_aprovacao !== undefined) setConfig('exigir_aprovacao', !!b.exigir_aprovacao);
+  if (b.exigir_aprovacao !== undefined) setConfig('exigir_aprovacao_teste', !!b.exigir_aprovacao);
+  if (b.tiros_padrao !== undefined) setConfig('tiros_padrao', Math.min(3, Math.max(1, Number(b.tiros_padrao) || 1)));
+  if (b.antecedencia_seg !== undefined) setConfig('antecedencia_seg', Math.min(180, Math.max(30, Number(b.antecedencia_seg) || 60)));
   res.json({ ok: true });
 });
 
@@ -266,5 +296,9 @@ app.listen(porta, () => {
   else jogos.carregar();
   // atualiza a descoberta de padrões sozinho: 3 min depois de ligar e a cada 6 horas
   setTimeout(() => { if (jogos.ligas().length) descobrir.rodar(); }, 3 * 60000);
-  setInterval(() => { if (jogos.ligas().length) descobrir.rodar(); }, 6 * 3600e3);
+  setInterval(async () => {
+    if (!jogos.ligas().length) return;
+    await descobrir.rodar();
+    if (getConfig('ia_auto', false)) iaSinais.sugerir('').catch(() => {});
+  }, 6 * 3600e3);
 });

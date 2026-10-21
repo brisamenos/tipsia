@@ -16,9 +16,16 @@ async function chamar(metodo, corpo) {
   return j.result;
 }
 
+let avisouFalta = 0;
 async function enviar(texto, { para, responderA } = {}) {
   const destino = para || chatId();
-  if (!token() || !destino) return null;
+  if (!token() || !destino) {
+    if (Date.now() - avisouFalta > 3600e3) {
+      avisouFalta = Date.now();
+      log('erro', !token() ? 'Sinal não enviado: falta TELEGRAM_BOT_TOKEN nas variáveis do servidor' : 'Sinal não enviado: falta o Chat ID em Configurações');
+    }
+    return null;
+  }
   try {
     const corpo = { chat_id: destino, text: texto, parse_mode: 'HTML', disable_web_page_preview: true };
     if (responderA) corpo.reply_parameters = { message_id: responderA, allow_sending_without_reply: true };
@@ -27,6 +34,19 @@ async function enviar(texto, { para, responderA } = {}) {
   } catch (e) {
     log('erro', `Falha ao enviar no Telegram: ${e.message}`);
     return null;
+  }
+}
+
+// Edita uma mensagem já enviada (usado para marcar GREEN/RED no próprio sinal)
+async function editar(msgId, texto, para) {
+  const destino = para || chatId();
+  if (!token() || !destino || !msgId) return false;
+  try {
+    await chamar('editMessageText', { chat_id: destino, message_id: msgId, text: texto, parse_mode: 'HTML', disable_web_page_preview: true });
+    return true;
+  } catch (e) {
+    if (!/not modified/i.test(e.message)) log('erro', `Falha ao editar no Telegram: ${e.message}`);
+    return false;
   }
 }
 
@@ -60,4 +80,4 @@ async function escutar() {
   }
 }
 
-module.exports = { enviar, escutar, registrarComandos, chatId };
+module.exports = { enviar, editar, escutar, registrarComandos, chatId };

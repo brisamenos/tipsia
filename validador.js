@@ -4,29 +4,85 @@
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
 const { avaliar, ligasDaRegra } = require('./regras');
 const jogos = require('./jogos');
-const { db } = require('./db');
+const { db, getConfig } = require('./db');
 
 
+// Cada entrada: { acerto, odd } (1 tiro) ou, com tiros, também { lucro, apostas, pImpl, tiro }
 function estatisticas(entradas) {
   const n = entradas.length;
   const acertos = entradas.filter((e) => e.acerto).length;
+  const lucroDe = (e) => (e.lucro !== undefined ? e.lucro : e.odd ? (e.acerto ? e.odd - 1 : -1) : null);
+  const comLucro = entradas.filter((e) => lucroDe(e) != null);
+  const lucro = comLucro.reduce((s, e) => s + lucroDe(e), 0);
+  const apostas = comLucro.reduce((s, e) => s + (e.apostas || 1), 0);
+  const pDe = (e) => (e.pImpl != null ? e.pImpl : e.odd ? 1 / e.odd : null);
+  const comP = entradas.filter((e) => pDe(e) != null);
+  const esperado = comP.reduce((s, e) => s + pDe(e), 0);
+  const variancia = comP.reduce((s, e) => s + pDe(e) * (1 - pDe(e)), 0);
+  const acertosComP = comP.filter((e) => e.acerto).length;
   const comOdd = entradas.filter((e) => e.odd);
-  const lucro = comOdd.reduce((s, e) => s + (e.acerto ? e.odd - 1 : -1), 0);
-  const esperado = comOdd.reduce((s, e) => s + 1 / e.odd, 0);
-  const variancia = comOdd.reduce((s, e) => s + (1 / e.odd) * (1 - 1 / e.odd), 0);
-  const acertosComOdd = comOdd.filter((e) => e.acerto).length;
   const oddMedia = comOdd.length ? comOdd.reduce((s, e) => s + e.odd, 0) / comOdd.length : null;
+  const umTiro = entradas.every((e) => !e.apostas || e.apostas === 1) && entradas.every((e) => !e.tiro || e.tiro <= 1);
+  const porTiro = {};
+  for (const e of entradas) if (e.tiro) porTiro[e.tiro] = (porTiro[e.tiro] || 0) + 1;
   return {
     n,
     acertos,
     taxa: n ? +(acertos / n * 100).toFixed(1) : null,
     oddMedia: oddMedia ? +oddMedia.toFixed(2) : null,
-    taxaEquilibrio: oddMedia ? +(100 / oddMedia).toFixed(1) : null, // acerto mínimo para não perder
+    taxaEquilibrio: oddMedia && umTiro ? +(100 / oddMedia).toFixed(1) : null, // acerto mínimo para não perder (1 tiro)
     lucro: +lucro.toFixed(2),
-    roi: comOdd.length ? +(lucro / comOdd.length * 100).toFixed(1) : null,
+    roi: apostas ? +(lucro / apostas * 100).toFixed(1) : null,                // lucro por unidade apostada
     // z > 2 = acertou bem acima do que as odds previam (provavelmente não é sorte)
-    z: variancia > 0 ? +((acertosComOdd - esperado) / Math.sqrt(variancia)).toFixed(2) : null,
+    z: variancia > 0 ? +((acertosComP - esperado) / Math.sqrt(variancia)).toFixed(2) : null,
+    porTiro,
   };
+}
+
+// Quantos jogos ficam "no escuro" entre o último resultado conhecido e o jogo do sinal.
+// Ex.: liga de 2 em 2 minutos e sinal 1 minuto antes = o jogo anterior ainda está rolando (1).
+function defasagem(liga) {
+  const cont = getConfig('defasagem_' + liga);
+  if (cont && typeof cont === 'object') {
+    const melhor = Object.entries(cont).sort((a, b) => b[1] - a[1])[0];
+    if (melhor) return Number(melhor[0]);
+  }
+  const iv = jogos.intervaloTipico(jogos.daLiga(liga));
+  return iv <= 150000 ? 1 : 0;
+}
+
+// Simula a regra em uma liga, com até N tiros (o sinal vale para N jogos seguidos)
+function simularLiga(regra, liga, tiros = 1) {
+  const arr = jogos.daLiga(liga);
+  const iv = jogos.intervaloTipico(arr);
+  const d = defasagem(liga);
+  const out = [];
+  let ocupadoAte = -1;
+  for (let i = 1 + d; i < arr.length; i++) {
+    if (i <= ocupadoAte) continue;                                  // já há um sinal rodando nesta liga
+    if (arr[i].t - arr[i - 1 - d].t > iv * (d + 1) * 1.6) continue; // buraco na coleta
+    if (!avaliar(regra, arr, arr[i], i - d)) continue;              // só enxerga até o último resultado conhecido
+    let lucro = 0, semOdd = false, tiro = 0, q = 1, incompleto = false, k;
+    for (k = 0; k < tiros; k++) {
+      const j = i + k;
+      if (j >= arr.length || (k > 0 && arr[j].t - arr[j - 1].t > iv * 1.6)) { incompleto = true; break; }
+      const o = oddDo(arr[j], regra.mercado);
+      if (o) q *= 1 - 1 / o; else semOdd = true;
+      if (bateu(arr[j], regra.mercado)) { tiro = k + 1; if (o) lucro += o - 1; break; }
+      lucro -= 1;
+    }
+    if (incompleto) continue;
+    for (let k2 = k + 1; k2 < tiros && i + k2 < arr.length; k2++) { const o = oddDo(arr[i + k2], regra.mercado); if (o) q *= 1 - 1 / o; }
+    out.push({
+      t: arr[i].t, liga, acerto: tiro > 0, tiro,
+      odd: oddDo(arr[i], regra.mercado),
+      lucro: semOdd ? null : +lucro.toFixed(4),
+      apostas: tiro || tiros,
+      pImpl: semOdd ? null : 1 - q,
+    });
+    ocupadoAte = i + (tiro || tiros) - 1;
+  }
+  return out;
 }
 
 function classificar(treino, teste) {
@@ -42,18 +98,9 @@ function classificar(treino, teste) {
 
 // Percorre todos os jogos das ligas da regra e simula o sinal
 function simular(regra) {
-  const todas = Object.keys(LIGAS);
+  const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
   const entradas = [];
-  for (const liga of ligasDaRegra(regra, todas)) {
-    const arr = jogos.daLiga(liga);
-    const intervalo = jogos.intervaloTipico(arr);
-    for (let i = 1; i < arr.length; i++) {
-      // só vale se o alvo é o jogo logo depois do último resultado conhecido
-      if (arr[i].t - arr[i - 1].t > intervalo * 1.6) continue;
-      if (!avaliar(regra, arr, arr[i], i)) continue;
-      entradas.push({ t: arr[i].t, liga, acerto: bateu(arr[i], regra.mercado), odd: oddDo(arr[i], regra.mercado) });
-    }
-  }
+  for (const liga of ligasDaRegra(regra, Object.keys(LIGAS))) entradas.push(...simularLiga(regra, liga, tiros));
   entradas.sort((a, b) => a.t - b.t);
   return entradas;
 }
@@ -80,8 +127,11 @@ function base(regra, corte) {
 
 function aoVivo(regraId) {
   if (!regraId) return null;
-  const rows = db.prepare(`SELECT status, odd FROM sinais WHERE regra_id = ? AND status IN ('green','red')`).all(regraId);
-  return estatisticas(rows.map((r) => ({ acerto: r.status === 'green', odd: r.odd })));
+  const rows = db.prepare(`SELECT status, odd, lucro, tiro_atual, tiro_green FROM sinais WHERE regra_id = ? AND status IN ('green','red')`).all(regraId);
+  return estatisticas(rows.map((r) => ({
+    acerto: r.status === 'green', odd: r.odd, lucro: r.lucro,
+    apostas: r.status === 'green' ? (r.tiro_green || 1) : (r.tiro_atual || 1), tiro: r.tiro_green || 0,
+  })));
 }
 
 function backtest(regra) {
@@ -101,6 +151,7 @@ function backtest(regra) {
     base: base(regra, corte),
     aoVivo: aoVivo(regra.id),
     status: classificar(treino, teste),
+    tiros: Math.min(3, Math.max(1, Number(regra.tiros) || 1)),
     frequencia: totalJogos ? +(entradas.length / totalJogos * 100).toFixed(2) : 0,
   };
 }
@@ -119,4 +170,4 @@ function panorama() {
   return out;
 }
 
-module.exports = { backtest, panorama, estatisticas, classificar };
+module.exports = { backtest, panorama, estatisticas, classificar, simularLiga, defasagem };

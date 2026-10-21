@@ -15,7 +15,7 @@ async function api(url, opts = {}) {
 }
 
 function regraVazia() {
-  return { id: null, nome: '', ligas: ['*'], mercado: 'ambas_sim', modo: 'observacao', condicoes: [condicaoVazia('sequencia')] };
+  return { id: null, nome: '', ligas: ['*'], mercado: 'ambas_sim', modo: 'observacao', tiros: 1, condicoes: [condicaoVazia('sequencia')] };
 }
 function condicaoVazia(tipo) {
   return { tipo, mercado: 'ambas_sim', n: 3, valor: false, op: '>=', qtd: 7, placar: '0-0', valores: '', min: '', max: '' };
@@ -54,6 +54,7 @@ function painel() {
       if (aba === 'sinais') this.carregarSinais();
       if (aba === 'estatisticas') this.panorama = await api('/api/panorama');
       if (aba === 'descobrir') this.carregarDescoberta();
+      if (aba === 'iasinais') { if (!this.status) await this.carregarStatus(); this.carregarIA(); }
       if (aba === 'jogos') this.carregarJogos();
       if (aba === 'config') { await this.carregarStatus(); this.cfg.chat = this.status.telegram.chatId || ''; }
     },
@@ -71,7 +72,7 @@ function painel() {
 
     // ---- Regras
     async carregarRegras() { this.regras = await api('/api/regras'); },
-    nova() { this.editando = regraVazia(); this.resultadoTeste = null; },
+    nova() { this.editando = regraVazia(); this.editando.tiros = this.status?.tirosPadrao || 1; this.resultadoTeste = null; },
     editar(r) {
       this.editando = JSON.parse(JSON.stringify(r));
       this.editando.condicoes = this.editando.condicoes.map((c) => ({ ...condicaoVazia(c.tipo), ...c, valores: Array.isArray(c.valores) ? c.valores.join(', ') : (c.valores || '') }));
@@ -89,7 +90,7 @@ function painel() {
     corpoRegra() {
       const e = this.editando;
       return {
-        nome: e.nome, ligas: e.ligas, mercado: e.mercado, modo: e.modo,
+        nome: e.nome, ligas: e.ligas, mercado: e.mercado, modo: e.modo, tiros: +e.tiros || 1,
         condicoes: e.condicoes.map((c) => {
           switch (c.tipo) {
             case 'sequencia': return { tipo: c.tipo, mercado: c.mercado, n: +c.n, valor: c.valor === true || c.valor === 'true' };
@@ -224,10 +225,67 @@ window.addEventListener('message',window.__lab);
     },
     async ativarIdeia(r, modo) {
       try {
-        await api('/api/regras', { method: 'POST', body: { nome: r.nome.slice(0, 80), ligas: r.ligas, mercado: r.mercado, condicoes: r.condicoes, modo } });
+        await api('/api/regras', { method: 'POST', body: { nome: r.nome.slice(0, 80), ligas: r.ligas, mercado: r.mercado, condicoes: r.condicoes, modo, tiros: r.tiros || 1, origem: 'descoberta' } });
         this.toast(modo === 'telegram' ? 'Regra criada no modo Telegram' : 'Regra criada em observação');
         this.carregarRegras();
       } catch (e) { this.toast(e.message); }
+    },
+
+    // ---- IA Sinais (OpenAI)
+    iaS: null,
+    iaCfg: { chave: '', modelo: '', qtd: 5, pedido: '' },
+    iaFiltro: 'pendente',
+    iaPedindo: false,
+    async carregarIA() {
+      this.iaS = await api('/api/ia-sinais');
+      this.iaCfg.modelo = this.iaS.modelo;
+      this.iaCfg.qtd = this.iaS.qtd;
+    },
+    async salvarIA(extra = {}) {
+      try {
+        await api('/api/ia-sinais/config', { method: 'POST', body: { chave: this.iaCfg.chave, modelo: this.iaCfg.modelo, qtd: this.iaCfg.qtd, ...extra } });
+        this.iaCfg.chave = '';
+        this.toast('Configuração da IA salva');
+        this.carregarIA();
+      } catch (e) { this.toast(e.message); }
+    },
+    async pedirIA() {
+      this.iaPedindo = true;
+      try {
+        const r = await api('/api/ia-sinais/sugerir', { method: 'POST', body: { pedido: this.iaCfg.pedido } });
+        this.toast(`A IA sugeriu ${r.criadas} sinal(is). Revise e aprove.`);
+        this.iaFiltro = 'pendente';
+        await this.carregarIA();
+      } catch (e) { this.toast(e.message); }
+      this.iaPedindo = false;
+    },
+    iaLista() {
+      if (!this.iaS) return [];
+      const f = this.iaFiltro;
+      return this.iaS.regras.filter((r) => f === 'pendente' ? r.modo === 'pendente'
+        : f === 'ativos' ? (r.modo === 'telegram' || r.modo === 'observacao') : r.modo === 'desligado');
+    },
+    contaIA(f) { const v = this.iaFiltro; this.iaFiltro = f; const n = this.iaLista().length; this.iaFiltro = v; return n; },
+    async modoIA(r, modo) {
+      await api(`/api/regras/${r.id}`, { method: 'PUT', body: { modo } });
+      this.toast({ telegram: 'Aprovado: os sinais vão para o Telegram', observacao: 'Em observação (registra sem enviar)', desligado: 'Pausado' }[modo]);
+      this.carregarIA();
+    },
+    async tirosIA(r, tiros) {
+      await api(`/api/regras/${r.id}`, { method: 'PUT', body: { tiros: +tiros } });
+      this.toast('Tiros alterados e assertividade recalculada');
+      this.carregarIA();
+    },
+    async excluirIA(r) { await this.excluir(r); this.carregarIA(); },
+    assertividade(r) {
+      const v = r.validacao;
+      if (!v) return null;
+      if (v.aoVivo && v.aoVivo.n >= 20) return { rotulo: 'ao vivo', ...v.aoVivo };
+      return v.teste && v.teste.n ? { rotulo: 'no histórico', ...v.teste } : null;
+    },
+    async salvarTempo() {
+      await api('/api/config', { method: 'POST', body: { tiros_padrao: this.status.tirosPadrao, antecedencia_seg: this.status.antecedencia } });
+      this.toast('Salvo');
     },
 
     // ---- Config

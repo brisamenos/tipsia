@@ -2,8 +2,7 @@
 // A escolha das melhores é feita SÓ no treino (1ª metade). O teste (2ª metade)
 // mostra se a ideia continuou funcionando em jogos que ela não viu.
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
-const { avaliar } = require('./regras');
-const { estatisticas, classificar } = require('./validador');
+const { estatisticas, classificar, simularLiga } = require('./validador');
 const jogos = require('./jogos');
 const { getConfig, setConfig, log } = require('./db');
 
@@ -56,19 +55,10 @@ function corteGlobal() {
   return ts.length ? ts[Math.floor(ts.length / 2)] : 0;
 }
 
-// testa uma ideia em um conjunto de ligas
-function testar(regra, ligas, corte) {
+// testa uma ideia em um conjunto de ligas (com os tiros configurados)
+function testar(regra, ligas, corte, tiros) {
   const tr = [], te = [];
-  for (const liga of ligas) {
-    const arr = jogos.daLiga(liga);
-    const intervalo = jogos.intervaloTipico(arr);
-    for (let i = 1; i < arr.length; i++) {
-      if (arr[i].t - arr[i - 1].t > intervalo * 1.6) continue;
-      if (!avaliar(regra, arr, arr[i], i)) continue;
-      const e = { acerto: bateu(arr[i], regra.mercado), odd: oddDo(arr[i], regra.mercado) };
-      (arr[i].t < corte ? tr : te).push(e);
-    }
-  }
+  for (const liga of ligas) for (const e of simularLiga(regra, liga, tiros)) (e.t < corte ? tr : te).push(e);
   return { treino: estatisticas(tr), teste: estatisticas(te) };
 }
 
@@ -81,6 +71,7 @@ async function rodar() {
     const todasLigas = Object.keys(LIGAS).filter((l) => jogos.daLiga(l).length > 100);
     const opcoesLiga = [['*', todasLigas], ...todasLigas.map((l) => [l, [l]])];
     const corte = corteGlobal();
+    const tiros = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
     const planos = [];
     for (const mercado of Object.keys(MERCADOS)) {
       for (const c of candidatos(mercado)) for (const [chave, ligas] of opcoesLiga) planos.push({ mercado, c, chave, ligas });
@@ -90,10 +81,10 @@ async function rodar() {
     for (let k = 0; k < planos.length; k++) {
       const { mercado, c, chave, ligas } = planos[k];
       const regra = { mercado, condicoes: c.condicoes };
-      const { treino, teste } = testar(regra, ligas, corte);
+      const { treino, teste } = testar(regra, ligas, corte, tiros);
       if (treino.roi != null && treino.n >= 40) {
         resultados.push({
-          mercado, ligas: [chave], condicoes: c.condicoes,
+          mercado, ligas: [chave], condicoes: c.condicoes, tiros,
           nome: `${MERCADOS[mercado].nome} · ${chave === '*' ? 'Todas' : LIGAS[chave]} · ${c.desc}`,
           treino, teste, status: classificar(treino, teste),
         });
@@ -113,6 +104,7 @@ async function rodar() {
     const res = {
       em: new Date().toISOString(),
       corte: new Date(corte).toISOString(),
+      tiros,
       testadas: planos.length,
       comAmostra: resultados.length,
       lucraramTreino: lucraramTreino.length,

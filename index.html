@@ -13,7 +13,7 @@
 <header class="topo">
   <div class="logo">LAB <span>SINAIS</span></div>
   <nav class="abas">
-    <template x-for="[k, n] in [['inicio','Início'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
+    <template x-for="[k, n] in [['inicio','Início'],['iasinais','IA Sinais'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
       <button class="aba" :class="aba === k && 'ativa'" @click="ir(k)" x-text="n"></button>
     </template>
   </nav>
@@ -65,6 +65,108 @@
         <p class="suave" style="margin:0">Cada regra é testada em duas metades do histórico. <b>Treino</b> é onde a ideia parece boa.
           <b>Teste</b> são jogos que a regra não viu. Só confie em regras que lucram no teste com amostra grande.
           No futebol virtual, os jogos são sorteados por algoritmo e a odd já tem margem da casa, então a maioria das regras será reprovada. Isso é esperado.</p>
+      </div>
+    </div>
+  </template>
+</section>
+
+<!-- ================= IA SINAIS ================= -->
+<section x-show="aba === 'iasinais'">
+  <h2>IA Sinais</h2>
+  <template x-if="iaS">
+    <div>
+      <div class="cartao">
+        <h3>Configuração da OpenAI</h3>
+        <p class="pequeno" :class="iaS.temChave ? 'pos' : 'neg'"
+          x-text="iaS.temChave ? 'API Key configurada (' + iaS.chaveFinal + ')' + (iaS.chaveNoServidor ? ' nas variáveis do servidor' : '') : 'Falta a API Key da OpenAI'"></p>
+        <div class="linha">
+          <div><label>API Key (fica guardada só no seu servidor)</label><input type="password" x-model="iaCfg.chave" placeholder="sk-..." autocomplete="off"></div>
+          <div class="fixo" style="width:180px"><label>Modelo</label><input x-model="iaCfg.modelo"></div>
+          <div class="fixo" style="width:150px"><label>Sugestões por vez</label><input type="number" min="1" max="10" x-model.number="iaCfg.qtd"></div>
+          <div class="fixo"><button class="btn" @click="salvarIA()">Salvar</button></div>
+        </div>
+        <label style="margin-top:10px"><input type="checkbox" style="width:auto" :checked="iaS.auto" @change="salvarIA({ auto: !iaS.auto })">
+          Pedir novas sugestões sozinho a cada 6 horas (ficam aguardando sua aprovação)</label>
+      </div>
+
+      <div class="cartao">
+        <h3>Pedir sinais à IA</h3>
+        <p class="suave pequeno" style="margin-top:0">A IA recebe o resumo de todas as ligas, as mudanças recentes e as melhores ideias testadas pelo sistema, e propõe sinais.
+          A <b>assertividade</b> de cada sinal é calculada pelo sistema no histórico real, com os tiros escolhidos. Nada vai para o Telegram sem você aprovar.</p>
+        <div class="campo"><label>Pedido (opcional)</label><input x-model="iaCfg.pedido" placeholder="Ex.: foque em over 2.5 na Inglaterra e na Itália"></div>
+        <button class="btn" @click="pedirIA()" :disabled="iaPedindo || iaS.rodando || !iaS.temChave" x-text="iaPedindo || iaS.rodando ? 'A IA está analisando...' : 'Pedir sinais à IA'"></button>
+        <div class="erro pequeno" style="margin-top:10px" x-show="iaS.ultimoErro" x-text="iaS.ultimoErro"></div>
+        <template x-if="iaS.ultima">
+          <div class="aviso pequeno" style="margin-top:12px">
+            <b>Análise da IA</b> (<span x-text="fmtDataHora(iaS.ultima.em)"></span> · <span x-text="iaS.ultima.modelo"></span>):
+            <span x-text="iaS.ultima.observacoes"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="chips" style="margin:14px 0">
+        <span class="chip" :class="iaFiltro === 'pendente' && 'on'" @click="iaFiltro = 'pendente'" x-text="'Aguardando aprovação (' + contaIA('pendente') + ')'"></span>
+        <span class="chip" :class="iaFiltro === 'ativos' && 'on'" @click="iaFiltro = 'ativos'" x-text="'Ativos (' + contaIA('ativos') + ')'"></span>
+        <span class="chip" :class="iaFiltro === 'pausados' && 'on'" @click="iaFiltro = 'pausados'" x-text="'Pausados (' + contaIA('pausados') + ')'"></span>
+      </div>
+
+      <template x-for="r in iaLista()" :key="r.id">
+        <div class="cartao">
+          <div class="linha" style="align-items:flex-start">
+            <div style="flex:3">
+              <b x-text="r.nome"></b>
+              <div class="suave pequeno" x-text="meta.mercados[r.mercado] + ' · ' + nomesLigas(r.ligas) + ' · ' + r.condicoes.map(c => descreverCond(c)).join(' + ')"></div>
+              <div class="pequeno" style="margin-top:6px" x-show="r.justificativa" x-text="'💡 ' + r.justificativa"></div>
+            </div>
+            <div class="fixo" style="text-align:right">
+              <template x-if="assertividade(r)">
+                <div>
+                  <div class="numero" x-text="assertividade(r).taxa + '%'"></div>
+                  <div class="suave pequeno" x-text="'assertividade ' + assertividade(r).rotulo + ' · ' + assertividade(r).n + ' sinais'"></div>
+                  <div class="pequeno" :class="clsNum(assertividade(r).roi)" x-text="'ROI ' + assertividade(r).roi + '%' + (assertividade(r).oddMedia ? ' · odd média ' + assertividade(r).oddMedia : '')"></div>
+                </div>
+              </template>
+              <div class="suave pequeno" x-show="!assertividade(r)">Sem amostra no histórico</div>
+            </div>
+          </div>
+          <div class="linha" style="margin-top:10px;align-items:center">
+            <div class="fixo"><span class="selo" :class="'s-' + (r.validacao?.status?.codigo || 'amostra_pequena')" x-text="(r.validacao?.status?.texto || 'Sem dados').split(':')[0]"></span></div>
+            <div class="fixo pequeno suave" x-show="r.validacao?.teste?.porTiro && Object.keys(r.validacao.teste.porTiro).length"
+              x-text="'Greens por tiro: ' + Object.entries(r.validacao?.teste?.porTiro || {}).map(([t, n]) => t + 'º: ' + n).join(' · ')"></div>
+            <div></div>
+            <div class="fixo"><select style="width:auto" :value="r.tiros || 1" @change="tirosIA(r, $event.target.value)">
+              <option value="1">1 tiro</option><option value="2">2 tiros</option><option value="3">3 tiros</option></select></div>
+            <template x-if="r.modo === 'pendente' || r.modo === 'desligado'">
+              <div class="fixo"><button class="btn peq" @click="modoIA(r, 'telegram')" x-text="r.modo === 'pendente' ? 'Aprovar (Telegram)' : 'Reativar'"></button></div>
+            </template>
+            <template x-if="r.modo === 'pendente'">
+              <div class="fixo"><button class="btn sec peq" @click="modoIA(r, 'observacao')">Só observar</button></div>
+            </template>
+            <template x-if="r.modo === 'telegram' || r.modo === 'observacao'">
+              <div class="fixo"><span class="pequeno" :class="r.modo === 'telegram' ? 'pos' : 'suave'" x-text="r.modo === 'telegram' ? 'Enviando no Telegram' : 'Em observação'"></span></div>
+            </template>
+            <template x-if="r.modo === 'observacao'">
+              <div class="fixo"><button class="btn peq" @click="modoIA(r, 'telegram')">Enviar no Telegram</button></div>
+            </template>
+            <template x-if="r.modo === 'telegram' || r.modo === 'observacao'">
+              <div class="fixo"><button class="btn sec peq" @click="modoIA(r, 'desligado')">Pausar</button></div>
+            </template>
+            <div class="fixo"><button class="btn perigo peq" @click="excluirIA(r)">Excluir</button></div>
+          </div>
+        </div>
+      </template>
+      <p class="suave" x-show="!iaLista().length">Nada aqui ainda.</p>
+
+      <div class="cartao" x-show="iaS.mudancas.length">
+        <h3>Mudanças recentes detectadas nas ligas</h3>
+        <p class="suave pequeno" style="margin-top:0">Comparação dos últimos 150 jogos com os 150 anteriores. Mostra só diferenças grandes demais para ser acaso comum (z ≥ 2).</p>
+        <div class="rolagem"><table>
+          <tr><th>Liga</th><th>Mercado</th><th>Antes</th><th>Agora</th><th>z</th></tr>
+          <template x-for="(m, i) in iaS.mudancas" :key="i">
+            <tr><td x-text="m.nomeLiga"></td><td x-text="m.nomeMercado"></td><td x-text="m.antes + '%'"></td>
+              <td :class="m.agora > m.antes ? 'pos' : 'neg'" x-text="m.agora + '%'"></td><td x-text="m.z"></td></tr>
+          </template>
+        </table></div>
       </div>
     </div>
   </template>
@@ -162,7 +264,12 @@
           <select x-model="editando.modo">
             <option value="observacao">Observação (registra, não envia)</option>
             <option value="telegram">Telegram (envia os sinais)</option>
-            <option value="desligado">Desligado</option>
+            <option value="pendente">Aguardando aprovação</option>
+            <option value="desligado">Pausado</option>
+          </select></div>
+        <div class="fixo" style="width:120px"><label>Tiros</label>
+          <select x-model="editando.tiros">
+            <template x-for="t in [1,2,3]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="+editando.tiros === t"></option></template>
           </select></div>
       </div>
       <div class="campo"><label>Ligas</label>
@@ -258,7 +365,7 @@
       <template x-for="r in regras" :key="r.id">
         <tr>
           <td class="quebra"><b x-text="r.nome"></b><div class="suave pequeno" x-text="r.condicoes.map(c => descreverCond(c)).join(' + ')"></div></td>
-          <td x-text="meta.mercados[r.mercado]"></td>
+          <td><span x-text="meta.mercados[r.mercado]"></span><div class="suave pequeno" x-text="(r.tiros || 1) + ((r.tiros || 1) > 1 ? ' tiros' : ' tiro') + (r.origem === 'ia' ? ' · IA' : '')"></div></td>
           <td class="pequeno" x-text="nomesLigas(r.ligas)"></td>
           <td><span x-text="r.validacao?.treino?.taxa != null ? r.validacao.treino.taxa + '%' : '-'"></span>
             <div class="pequeno" :class="clsNum(r.validacao?.treino?.roi)" x-text="r.validacao?.treino?.n ? r.validacao.treino.n + ' · ROI ' + r.validacao.treino.roi + '%' : ''"></div></td>
@@ -268,7 +375,7 @@
             <div class="pequeno" :class="clsNum(r.validacao?.aoVivo?.roi)" x-text="r.validacao?.aoVivo?.n ? r.validacao.aoVivo.n + ' · ROI ' + r.validacao.aoVivo.roi + '%' : ''"></div></td>
           <td><span class="selo" :class="'s-' + (r.validacao?.status?.codigo || 'amostra_pequena')" x-text="(r.validacao?.status?.texto || 'Sem dados').split(':')[0]"></span></td>
           <td><select style="width:auto" :value="r.modo" @change="mudarModo(r, $event.target.value)">
-            <option value="observacao">Observação</option><option value="telegram">Telegram</option><option value="desligado">Desligado</option></select></td>
+            <option value="observacao">Observação</option><option value="telegram">Telegram</option><option value="pendente">Aguardando</option><option value="desligado">Pausado</option></select></td>
           <td><button class="btn sec peq" @click="editar(r)">Editar</button> <button class="btn perigo peq" @click="excluir(r)">Excluir</button></td>
         </tr>
       </template>
@@ -290,7 +397,7 @@
   </div>
   <div class="cartao rolagem">
     <table>
-      <tr><th>Horário</th><th>Liga</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Regra</th><th>Placar</th><th>Resultado</th><th>Lucro</th><th>Telegram</th></tr>
+      <tr><th>Horário</th><th>Liga</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Regra</th><th>Placar</th><th>Resultado</th><th>Tiro</th><th>Lucro</th><th>Telegram</th></tr>
       <template x-for="s in sinais" :key="s.id">
         <tr>
           <td x-text="fmtDataHora(s.inicio)"></td><td x-text="meta.ligas[s.liga]"></td>
@@ -298,6 +405,7 @@
           <td x-text="s.odd ? s.odd.toFixed(2) : '-'"></td><td class="pequeno" x-text="s.regra"></td>
           <td x-text="s.placar || '-'"></td>
           <td><span :class="s.status === 'green' ? 'green' : s.status === 'red' ? 'red' : 'suave'" x-text="{green:'GREEN',red:'RED',pendente:'Aguardando',anulado:'Anulado'}[s.status]"></span></td>
+          <td class="pequeno" x-text="s.status === 'green' ? (s.tiro_green || 1) + 'º de ' + (s.tiros_max || 1) : s.status === 'pendente' ? (s.tiro_atual || 1) + 'º de ' + (s.tiros_max || 1) : (s.tiros_max || 1) > 1 ? (s.tiros_max) + ' tiros' : '-'"></td>
           <td :class="clsNum(s.lucro)" x-text="s.lucro != null ? s.lucro.toFixed(2) : '-'"></td>
           <td x-text="s.enviado ? 'Sim' : '-'"></td>
         </tr>
@@ -436,9 +544,24 @@
         </div>
         <div style="margin-top:14px">
           <label><input type="checkbox" style="width:auto" :checked="status.exigirAprovacao" @change="alternarAprovacao()">
-            Só enviar no Telegram regras <b>aprovadas</b> no teste (recomendado)</label>
-          <p class="suave pequeno">Desmarcando, qualquer regra em modo Telegram envia sinais, mesmo reprovada.</p>
+            Trava extra: só enviar regras que também foram <b>aprovadas no teste</b> do histórico</label>
+          <p class="suave pequeno">Desligada (padrão): toda regra que você colocar no modo Telegram envia os sinais.</p>
         </div>
+      </div>
+
+      <div class="cartao">
+        <h3>Envio dos sinais</h3>
+        <div class="linha">
+          <div class="fixo" style="width:200px"><label>Tiros padrão (novas regras)</label>
+            <select x-model.number="status.tirosPadrao">
+              <template x-for="t in [1,2,3]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="status.tirosPadrao === t"></option></template>
+            </select></div>
+          <div class="fixo" style="width:220px"><label>Antecedência do sinal (segundos)</label>
+            <input type="number" min="30" max="180" x-model.number="status.antecedencia"></div>
+          <div class="fixo"><button class="btn" @click="salvarTempo()">Salvar</button></div>
+        </div>
+        <p class="suave pequeno">Tiros: o sinal vale para até N jogos seguidos da mesma liga. Se o 1º errar, entra no 2º, e assim por diante.
+          A conta de lucro considera 1 unidade por tiro. Com 1 minuto de antecedência, o jogo anterior ainda pode estar rolando; o sistema leva isso em conta no teste.</p>
       </div>
 
       <div class="cartao">
