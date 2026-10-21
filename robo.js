@@ -166,6 +166,9 @@ const atualizarSinal = db.prepare(`UPDATE sinais SET status = @status, placar = 
 const regraPorId = db.prepare('SELECT * FROM regras WHERE id = ?');
 
 function proximoJogoDepois(liga, t) {
+  // quando o coletor volta de uma pausa, o próximo jogo pode já ter terminado (está no histórico)
+  const jaJogado = jogos.daLiga(liga).find((x) => x.t > t);
+  if (jaJogado) return jaJogado;
   const p = (proximas.get(liga) || []).find((x) => x.t > t);
   if (p) return p;
   const arr = jogos.daLiga(liga);
@@ -220,9 +223,21 @@ async function conferirResultados(novos) {
       }
     }
   }
-  // anula sinais que ficaram sem resultado por mais de 2 horas
-  db.prepare(`UPDATE sinais SET status = 'anulado' WHERE status = 'pendente' AND COALESCE(alvo_inicio, inicio) < ?`)
-    .run(new Date(Date.now() - 2 * 3600e3).toISOString());
+  // anula sinais que ficaram sem resultado por mais de 2 horas (ex.: coletor ficou parado e o jogo se perdeu)
+  const limite = new Date(Date.now() - 2 * 3600e3).toISOString();
+  const perdidos = db.prepare(`SELECT * FROM sinais WHERE status = 'pendente' AND COALESCE(alvo_inicio, inicio) < ?`).all(limite);
+  for (const s of perdidos) {
+    db.prepare(`UPDATE sinais SET status = 'anulado' WHERE id = ?`).run(s.id);
+    if (s.enviado && s.telegram_msg_id) {
+      let meta = {}, plano = null;
+      try { const x = JSON.parse(s.texto); meta = x.meta || {}; plano = x.plano; } catch { /* sinal antigo */ }
+      const hist = s.historico ? JSON.parse(s.historico) : [];
+      const txt = montarMensagem({ liga: s.liga, mercado: s.mercado, tiros: s.tiros_max || 1,
+        plano: plano || [{ inicio: s.inicio, casa: s.time_casa, fora: s.time_fora, odd: s.odd }], hist, meta })
+        .replace('🚨 <b>SINAL CONFIRMADO</b>', '⚪ <b>ANULADO</b> · resultado não coletado (coletor parado)');
+      await tg.editar(s.telegram_msg_id, txt, s.chat_id);
+    }
+  }
 }
 
 // ---------- Stop automático: pausa a regra sozinha quando o resultado ao vivo fica ruim ----------
