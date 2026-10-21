@@ -285,7 +285,7 @@ window.addEventListener('message',window.__lab);
     },
     async salvarTempo() {
       await api('/api/config', { method: 'POST', body: { tiros_padrao: this.status.tirosPadrao, antecedencia_seg: this.status.antecedencia } });
-      this.toast('Salvo');
+      this.toast('Salvo. O Descobrir padrões vai refazer a análise com ' + this.status.tirosPadrao + (this.status.tirosPadrao > 1 ? ' tiros.' : ' tiro.'));
     },
 
     // ---- Config

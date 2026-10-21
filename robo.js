@@ -50,7 +50,10 @@ const inserir = db.prepare(`INSERT OR IGNORE INTO jogos
   (id, liga, inicio, hora, minuto, time_casa, time_fora, gc, gf, gc_ht, gf_ht, odds)
   VALUES (@id, @liga, @inicio, @hora, @minuto, @time_casa, @time_fora, @gc, @gf, @gc_ht, @gf_ht, @odds)`);
 
-const caminhoColeta = (periodo) => `/api/matches/all?period=${periodo}&leagues=${LISTA_LIGAS.join(',')}&stale=1`;
+// "stale=1" devolve uma cópia em cache, atrasada 1-2 jogos. Só serve para carregar o histórico longo;
+// a coleta do dia a dia (1h) precisa dos dados frescos para o sinal sair a tempo.
+const caminhoColeta = (periodo) =>
+  `/api/matches/all?period=${periodo}&leagues=${LISTA_LIGAS.join(',')}` + (periodo === '1h' ? '' : '&stale=1');
 
 function periodoAtual() {
   const total = db.prepare('SELECT COUNT(*) AS n FROM jogos').get().n;
@@ -364,6 +367,12 @@ async function ciclo() {
 
 function iniciar() {
   jogos.carregar();
+  // os dados em cache fizeram o sistema "aprender" atrasos errados; zera uma vez
+  if (getConfig('defasagem_versao') !== 2) {
+    db.prepare("DELETE FROM config WHERE chave LIKE 'defasagem_%'").run();
+    setConfig('defasagem_versao', 2);
+    setTimeout(revalidarTodas, 5000);
+  }
   const seg = Math.max(30, Number(process.env.COLETA_INTERVALO) || 60);
   tg.registrarComandos({
     '/status': async () => {

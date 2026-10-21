@@ -183,7 +183,7 @@
     <p class="suave" style="margin:0">O sistema cria e testa sozinho centenas de ideias em <b>todos os mercados e ligas</b>:
       sequências, frequência nos últimos 10 jogos, placar e gols do jogo anterior e faixas de odd.
       As melhores são escolhidas olhando só a <b>1ª metade</b> dos jogos (treino) e depois conferidas na <b>2ª metade</b> (teste).
-      Roda sozinho a cada 6 horas. Toque em <b>Observar</b> para acompanhar uma ideia, ou <b>Telegram</b> para receber os sinais.</p>
+      Usa os <b>tiros padrão</b> de Configurações (trocou lá, a análise refaz sozinha). Roda sozinho a cada 6 horas. Toque em <b>Observar</b> para acompanhar uma ideia, ou <b>Telegram</b> para receber os sinais.</p>
   </div>
 
   <template x-if="descoberta?.rodando">
@@ -200,7 +200,7 @@
     <div>
       <div class="grade" style="margin-top:14px">
         <div class="cartao"><div class="rotulo">Ideias testadas</div><div class="numero" x-text="descoberta.resultado.testadas.toLocaleString('pt-BR')"></div>
-          <div class="suave pequeno" x-text="'Atualizado em ' + fmtDataHora(descoberta.resultado.em)"></div></div>
+          <div class="suave pequeno" x-text="'Com ' + (descoberta.resultado.tiros || 1) + ((descoberta.resultado.tiros || 1) > 1 ? ' tiros' : ' tiro') + ' · atualizado em ' + fmtDataHora(descoberta.resultado.em)"></div></div>
         <div class="cartao"><div class="rotulo">Lucraram no treino</div><div class="numero" x-text="descoberta.resultado.lucraramTreino"></div>
           <div class="suave pequeno">pareciam boas olhando o passado</div></div>
         <div class="cartao"><div class="rotulo">Continuaram lucrando no teste</div><div class="numero" x-text="descoberta.resultado.continuaram"></div>
@@ -227,7 +227,9 @@
                 <div class="pequeno" :class="clsNum(r.treino.roi)" x-text="r.treino.n + ' entradas · ROI ' + r.treino.roi + '%'"></div></td>
               <td><span x-text="r.teste.n ? r.teste.taxa + '%' : '-'"></span>
                 <div class="pequeno" :class="clsNum(r.teste.roi)" x-text="r.teste.n ? r.teste.n + ' entradas · ROI ' + r.teste.roi + '%' : ''"></div></td>
-              <td><span class="selo" :class="'s-' + r.status.codigo" x-text="r.status.texto.split(':')[0]"></span></td>
+              <td><span class="selo" :class="'s-' + r.status.codigo" x-text="r.status.texto.split(':')[0]"></span>
+                <div class="suave pequeno" x-show="r.teste.porTiro && Object.keys(r.teste.porTiro).length > 1"
+                  x-text="'Greens por tiro: ' + Object.entries(r.teste.porTiro || {}).map(([t, n]) => t + 'º: ' + n).join(' · ')"></div></td>
               <td><button class="btn sec peq" @click="ativarIdeia(r, 'observacao')">Observar</button>
                 <button class="btn peq" @click="ativarIdeia(r, 'telegram')">Telegram</button></td>
             </tr>

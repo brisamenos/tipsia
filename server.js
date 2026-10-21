@@ -257,7 +257,12 @@ app.post('/api/config', (req, res) => {
   const b = req.body || {};
   if (b.telegram_chat_id !== undefined) setConfig('telegram_chat_id', String(b.telegram_chat_id || '').trim() || null);
   if (b.exigir_aprovacao !== undefined) setConfig('exigir_aprovacao_teste', !!b.exigir_aprovacao);
-  if (b.tiros_padrao !== undefined) setConfig('tiros_padrao', Math.min(3, Math.max(1, Number(b.tiros_padrao) || 1)));
+  if (b.tiros_padrao !== undefined) {
+    const t = Math.min(3, Math.max(1, Number(b.tiros_padrao) || 1));
+    const mudou = t !== Number(getConfig('tiros_padrao', 1));
+    setConfig('tiros_padrao', t);
+    if (mudou && jogos.ligas().length) descobrir.rodar(); // refaz a análise com os novos tiros
+  }
   if (b.antecedencia_seg !== undefined) setConfig('antecedencia_seg', Math.min(180, Math.max(30, Number(b.antecedencia_seg) || 60)));
   res.json({ ok: true });
 });
