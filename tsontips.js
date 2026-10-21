@@ -111,22 +111,25 @@ async function api(caminho, tentativa = 0) {
   const r = await fetch(BASE + caminho, {
     headers: {
       Cookie: montarCookie(s),
-      Authorization: `Bearer ${s.access_token}`,
       'User-Agent': UA,
-      Accept: 'application/json',
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
       Referer: `${BASE}/dashboard`,
-      Origin: BASE,
+      'sec-ch-ua': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
     },
   });
   if (r.status === 401 || r.status === 403) {
-    const corpo = (await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
-    log('erro', `TsonTips ${r.status} em ${caminho.split('?')[0]}: ${corpo}`);
+    const corpo = (await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120);
+    const h = ['server', 'cf-ray', 'x-vercel-id', 'x-powered-by', 'cf-mitigated']
+      .map((k) => (r.headers.get(k) ? `${k}=${r.headers.get(k)}` : '')).filter(Boolean).join(' ');
+    log('erro', `TsonTips ${r.status} em ${caminho.split('?')[0]} [${h}] ${corpo}`);
     if (tentativa === 0) { await renovar(); return api(caminho, 1); }
-    const bloqueio = /cloudflare|just a moment|challenge|captcha|attention required/i.test(corpo);
-    throw new SessaoExpirada(
-      `TsonTips recusou o acesso (${r.status})` +
-      (bloqueio ? ' - bloqueio anti-robô (o site barra o IP do servidor)' : corpo ? ` - ${corpo}` : '')
-    );
+    throw new SessaoExpirada(`TsonTips recusou o acesso (${r.status}) - ${corpo} [${h}]`);
   }
   if (!r.ok) throw new Error(`TsonTips respondeu ${r.status} em ${caminho}`);
   return r.json();
