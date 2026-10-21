@@ -109,11 +109,24 @@ async function api(caminho, tentativa = 0) {
   if (!s.expires_at || s.expires_at * 1000 - Date.now() < 5 * 60000) s = await renovar();
 
   const r = await fetch(BASE + caminho, {
-    headers: { Cookie: montarCookie(s), 'User-Agent': UA, Accept: 'application/json', Referer: `${BASE}/dashboard` },
+    headers: {
+      Cookie: montarCookie(s),
+      Authorization: `Bearer ${s.access_token}`,
+      'User-Agent': UA,
+      Accept: 'application/json',
+      Referer: `${BASE}/dashboard`,
+      Origin: BASE,
+    },
   });
   if (r.status === 401 || r.status === 403) {
+    const corpo = (await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    log('erro', `TsonTips ${r.status} em ${caminho.split('?')[0]}: ${corpo}`);
     if (tentativa === 0) { await renovar(); return api(caminho, 1); }
-    throw new SessaoExpirada(`TsonTips recusou o acesso (${r.status})`);
+    const bloqueio = /cloudflare|just a moment|challenge|captcha|attention required/i.test(corpo);
+    throw new SessaoExpirada(
+      `TsonTips recusou o acesso (${r.status})` +
+      (bloqueio ? ' - bloqueio anti-robô (o site barra o IP do servidor)' : corpo ? ` - ${corpo}` : '')
+    );
   }
   if (!r.ok) throw new Error(`TsonTips respondeu ${r.status} em ${caminho}`);
   return r.json();
