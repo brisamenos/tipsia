@@ -1,0 +1,19 @@
+{
+  "name": "tson-sinais",
+  "version": "1.0.0",
+  "description": "Laboratório de sinais de futebol virtual Kiron com validação treino/teste e bot do Telegram",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0"
+  }
+}

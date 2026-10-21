@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laboratório de Sinais</title>
+  <link rel="stylesheet" href="/estilo.css">
+  <script src="/app.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+</head>
+<body x-data="painel()" x-init="iniciar()" x-cloak>
+
+<header class="topo">
+  <div class="logo">LAB <span>SINAIS</span></div>
+  <nav class="abas">
+    <template x-for="[k, n] in [['inicio','Início'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
+      <button class="aba" :class="aba === k && 'ativa'" @click="ir(k)" x-text="n"></button>
+    </template>
+  </nav>
+  <button class="btn sec peq" @click="sair()">Sair</button>
+</header>
+
+<main>
+
+<!-- ================= INÍCIO ================= -->
+<section x-show="aba === 'inicio'">
+  <h2>Visão geral</h2>
+  <template x-if="status">
+    <div>
+      <div class="erro" x-show="!status.sessao.configurada" style="margin-bottom:14px">
+        A sessão do TsonTips ainda não foi conectada. Vá em <b>Configurações</b> e cole o cookie.
+      </div>
+      <div class="erro" x-show="status.robo.ultimoErro" style="margin-bottom:14px">
+        <b>Último erro da coleta:</b> <span x-text="status.robo.ultimoErro"></span>
+      </div>
+      <div class="grade">
+        <div class="cartao"><div class="rotulo">Jogos no banco</div><div class="numero" x-text="status.totalJogos.toLocaleString('pt-BR')"></div>
+          <div class="suave pequeno">Última coleta: <span x-text="fmtDataHora(status.robo.ultimaColeta)"></span></div></div>
+        <div class="cartao"><div class="rotulo">Sinais enviados no Telegram</div>
+          <div class="numero"><span class="green" x-text="resumoSinais(status.enviados).g"></span> / <span class="red" x-text="resumoSinais(status.enviados).r"></span></div>
+          <div class="suave pequeno"><span x-text="resumoSinais(status.enviados).taxa"></span>% de acerto ·
+            <span :class="clsNum(+resumoSinais(status.enviados).lucro)" x-text="resumoSinais(status.enviados).lucro + ' unid.'"></span></div></div>
+        <div class="cartao"><div class="rotulo">Todos os sinais (incl. observação)</div>
+          <div class="numero"><span class="green" x-text="resumoSinais(status.sinais).g"></span> / <span class="red" x-text="resumoSinais(status.sinais).r"></span></div>
+          <div class="suave pequeno"><span x-text="resumoSinais(status.sinais).taxa"></span>% ·
+            <span :class="clsNum(+resumoSinais(status.sinais).lucro)" x-text="resumoSinais(status.sinais).lucro + ' unid.'"></span> ·
+            <span x-text="resumoSinais(status.sinais).p"></span> pendentes</div></div>
+        <div class="cartao"><div class="rotulo">Telegram</div>
+          <div class="numero" style="font-size:18px" x-text="status.telegram.token && status.telegram.chatId ? 'Conectado' : 'Falta configurar'"></div>
+          <div class="suave pequeno" x-text="status.exigirAprovacao ? 'Só envia regras aprovadas no teste' : 'Envia qualquer regra em modo Telegram'"></div></div>
+      </div>
+
+      <div class="cartao" style="margin-top:14px">
+        <h3>Jogos coletados por liga</h3>
+        <div class="rolagem"><table>
+          <tr><th>Liga</th><th>Jogos</th><th>Desde</th><th>Até</th></tr>
+          <template x-for="l in status.porLiga" :key="l.liga">
+            <tr><td x-text="meta.ligas[l.liga] || l.liga"></td><td x-text="l.n"></td><td x-text="fmtDataHora(l.de)"></td><td x-text="fmtDataHora(l.ate)"></td></tr>
+          </template>
+        </table></div>
+      </div>
+
+      <div class="cartao">
+        <h3>Como ler este painel</h3>
+        <p class="suave" style="margin:0">Cada regra é testada em duas metades do histórico. <b>Treino</b> é onde a ideia parece boa.
+          <b>Teste</b> são jogos que a regra não viu. Só confie em regras que lucram no teste com amostra grande.
+          No futebol virtual, os jogos são sorteados por algoritmo e a odd já tem margem da casa, então a maioria das regras será reprovada. Isso é esperado.</p>
+      </div>
+    </div>
+  </template>
+</section>
+
+<!-- ================= REGRAS ================= -->
+<section x-show="aba === 'regras'">
+  <div class="linha" style="margin-bottom:14px">
+    <h2 style="margin:0">Regras de sinal</h2>
+    <div class="fixo"><button class="btn" @click="nova()">+ Nova regra</button></div>
+  </div>
+
+  <!-- Editor -->
+  <template x-if="editando">
+    <div class="cartao" style="margin-bottom:14px">
+      <h3 x-text="editando.id ? 'Editar regra' : 'Nova regra'"></h3>
+      <div class="linha campo">
+        <div><label>Nome</label><input x-model="editando.nome" placeholder="Ex.: Ambas após 3 sem ambas"></div>
+        <div><label>Mercado da entrada</label>
+          <select x-model="editando.mercado">
+            <template x-for="(n, k) in meta.mercados" :key="k"><option :value="k" x-text="n" :selected="k === editando.mercado"></option></template>
+          </select></div>
+        <div><label>Modo</label>
+          <select x-model="editando.modo">
+            <option value="observacao">Observação (registra, não envia)</option>
+            <option value="telegram">Telegram (envia os sinais)</option>
+            <option value="desligado">Desligado</option>
+          </select></div>
+      </div>
+      <div class="campo"><label>Ligas</label>
+        <div class="chips">
+          <span class="chip" :class="editando.ligas.includes('*') && 'on'" @click="alternarLiga('*')">Todas</span>
+          <template x-for="(n, k) in meta.ligas" :key="k">
+            <span class="chip" :class="editando.ligas.includes(k) && 'on'" @click="alternarLiga(k)" x-text="n"></span>
+          </template>
+        </div>
+      </div>
+
+      <label>Condições (todas precisam ser verdadeiras)</label>
+      <template x-for="(c, i) in editando.condicoes" :key="i">
+        <div class="condicao">
+          <div class="linha">
+            <div style="flex:2"><label>Tipo</label>
+              <select x-model="c.tipo" @change="trocarTipo(c)">
+                <template x-for="(n, k) in meta.tiposCondicao" :key="k"><option :value="k" x-text="n" :selected="k === c.tipo"></option></template>
+              </select></div>
+
+            <template x-if="c.tipo === 'sequencia' || c.tipo === 'frequencia'">
+              <div><label>Mercado</label>
+                <select x-model="c.mercado">
+                  <template x-for="(n, k) in meta.mercados" :key="k"><option :value="k" x-text="n" :selected="k === c.mercado"></option></template>
+                </select></div>
+            </template>
+            <template x-if="c.tipo === 'sequencia' || c.tipo === 'frequencia'">
+              <div class="fixo" style="width:90px"><label>Últimos N</label><input type="number" min="1" max="50" x-model="c.n"></div>
+            </template>
+            <template x-if="c.tipo === 'sequencia'">
+              <div class="fixo" style="width:130px"><label>Resultado</label>
+                <select x-model="c.valor"><option :value="false" :selected="!c.valor">Sem o mercado</option><option :value="true" :selected="c.valor">Com o mercado</option></select></div>
+            </template>
+            <template x-if="c.tipo === 'frequencia' || c.tipo === 'gols_anterior'">
+              <div class="fixo" style="width:80px"><label>Comparação</label>
+                <select x-model="c.op"><template x-for="o in ['>=','<=','=','>','<']"><option :value="o" x-text="o" :selected="o === c.op"></option></template></select></div>
+            </template>
+            <template x-if="c.tipo === 'frequencia' || c.tipo === 'gols_anterior'">
+              <div class="fixo" style="width:90px"><label x-text="c.tipo === 'frequencia' ? 'Vezes' : 'Gols'"></label><input type="number" min="0" x-model="c.qtd"></div>
+            </template>
+            <template x-if="c.tipo === 'placar_anterior'">
+              <div><label>Placares (separe por vírgula)</label><input x-model="c.placar" placeholder="0-0, 1-0"></div>
+            </template>
+            <template x-if="c.tipo === 'minuto' || c.tipo === 'hora'">
+              <div><label x-text="c.tipo === 'minuto' ? 'Minutos (ex.: 1, 25, 39)' : 'Horas (ex.: 8, 9, 22)'"></label><input x-model="c.valores"></div>
+            </template>
+            <template x-if="c.tipo === 'odd'">
+              <div class="fixo" style="width:100px"><label>Odd mínima</label><input type="number" step="0.01" x-model="c.min"></div>
+            </template>
+            <template x-if="c.tipo === 'odd'">
+              <div class="fixo" style="width:100px"><label>Odd máxima</label><input type="number" step="0.01" x-model="c.max"></div>
+            </template>
+            <div class="fixo"><button class="btn perigo peq" @click="editando.condicoes.splice(i, 1)" :disabled="editando.condicoes.length === 1">Remover</button></div>
+          </div>
+        </div>
+      </template>
+      <button class="btn sec peq" @click="addCondicao()">+ Condição</button>
+
+      <div class="linha" style="margin-top:16px;justify-content:flex-end">
+        <div class="fixo"><button class="btn sec" @click="editando = null; resultadoTeste = null">Fechar</button></div>
+        <div class="fixo"><button class="btn sec" @click="testar()" :disabled="testando" x-text="testando ? 'Testando...' : 'Testar no histórico'"></button></div>
+        <div class="fixo"><button class="btn" @click="salvar()">Salvar</button></div>
+      </div>
+
+      <!-- Resultado do teste -->
+      <template x-if="resultadoTeste">
+        <div style="margin-top:16px">
+          <div class="linha" style="align-items:center;margin-bottom:8px">
+            <div><span class="selo" :class="'s-' + resultadoTeste.status.codigo" x-text="resultadoTeste.status.texto"></span></div>
+            <div class="fixo suave pequeno">A regra dispara em <b x-text="resultadoTeste.frequencia + '%'"></b> dos <span x-text="resultadoTeste.totalJogos"></span> jogos</div>
+          </div>
+          <div class="rolagem"><table>
+            <tr><th></th><th>Entradas</th><th>Acerto</th><th>Odd média</th><th>Acerto mínimo p/ empatar</th><th>Lucro (unid.)</th><th>ROI</th><th>Confiança (z)</th></tr>
+            <template x-for="[nome, s] in [['Treino (1ª metade)', resultadoTeste.treino], ['Teste (2ª metade)', resultadoTeste.teste], ['Ao vivo (sinais reais)', resultadoTeste.aoVivo], ['Apostar em todos (treino)', resultadoTeste.base.treino], ['Apostar em todos (teste)', resultadoTeste.base.teste]]">
+              <tr x-show="s">
+                <td x-text="nome"></td><td x-text="s?.n"></td><td x-text="s?.taxa != null ? s.taxa + '%' : '-'"></td>
+                <td x-text="s?.oddMedia ?? '-'"></td><td x-text="s?.taxaEquilibrio != null ? s.taxaEquilibrio + '%' : '-'"></td>
+                <td :class="clsNum(s?.lucro)" x-text="s?.lucro"></td><td :class="clsNum(s?.roi)" x-text="s?.roi != null ? s.roi + '%' : '-'"></td>
+                <td x-text="s?.z ?? '-'"></td>
+              </tr>
+            </template>
+          </table></div>
+          <p class="suave pequeno">Confiança (z): acima de 2 indica que a regra acertou bem mais do que as odds previam. Perto de 0 ou negativo é sorte/azar normal.</p>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- Lista -->
+  <div class="cartao rolagem">
+    <table>
+      <tr><th>Regra</th><th>Mercado</th><th>Ligas</th><th>Treino</th><th>Teste</th><th>Ao vivo</th><th>Status</th><th>Modo</th><th></th></tr>
+      <template x-for="r in regras" :key="r.id">
+        <tr>
+          <td class="quebra"><b x-text="r.nome"></b><div class="suave pequeno" x-text="r.condicoes.map(c => descreverCond(c)).join(' + ')"></div></td>
+          <td x-text="meta.mercados[r.mercado]"></td>
+          <td class="pequeno" x-text="nomesLigas(r.ligas)"></td>
+          <td><span x-text="r.validacao?.treino?.taxa != null ? r.validacao.treino.taxa + '%' : '-'"></span>
+            <div class="pequeno" :class="clsNum(r.validacao?.treino?.roi)" x-text="r.validacao?.treino?.n ? r.validacao.treino.n + ' · ROI ' + r.validacao.treino.roi + '%' : ''"></div></td>
+          <td><span x-text="r.validacao?.teste?.taxa != null ? r.validacao.teste.taxa + '%' : '-'"></span>
+            <div class="pequeno" :class="clsNum(r.validacao?.teste?.roi)" x-text="r.validacao?.teste?.n ? r.validacao.teste.n + ' · ROI ' + r.validacao.teste.roi + '%' : ''"></div></td>
+          <td><span x-text="r.validacao?.aoVivo?.n ? r.validacao.aoVivo.taxa + '%' : '-'"></span>
+            <div class="pequeno" :class="clsNum(r.validacao?.aoVivo?.roi)" x-text="r.validacao?.aoVivo?.n ? r.validacao.aoVivo.n + ' · ROI ' + r.validacao.aoVivo.roi + '%' : ''"></div></td>
+          <td><span class="selo" :class="'s-' + (r.validacao?.status?.codigo || 'amostra_pequena')" x-text="(r.validacao?.status?.texto || 'Sem dados').split(':')[0]"></span></td>
+          <td><select style="width:auto" :value="r.modo" @change="mudarModo(r, $event.target.value)">
+            <option value="observacao">Observação</option><option value="telegram">Telegram</option><option value="desligado">Desligado</option></select></td>
+          <td><button class="btn sec peq" @click="editar(r)">Editar</button> <button class="btn perigo peq" @click="excluir(r)">Excluir</button></td>
+        </tr>
+      </template>
+    </table>
+    <p class="suave pequeno" x-show="!regras.length">Nenhuma regra ainda.</p>
+  </div>
+</section>
+
+<!-- ================= SINAIS ================= -->
+<section x-show="aba === 'sinais'">
+  <h2>Sinais</h2>
+  <div class="linha" style="margin-bottom:12px">
+    <div style="max-width:300px"><label>Regra</label>
+      <select x-model="filtroSinais.regra" @change="carregarSinais()">
+        <option value="">Todas</option>
+        <template x-for="r in regras" :key="r.id"><option :value="r.id" x-text="r.nome"></option></template>
+      </select></div>
+    <div class="fixo"><label><input type="checkbox" style="width:auto" x-model="filtroSinais.enviados" @change="carregarSinais()"> Só os enviados no Telegram</label></div>
+  </div>
+  <div class="cartao rolagem">
+    <table>
+      <tr><th>Horário</th><th>Liga</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Regra</th><th>Placar</th><th>Resultado</th><th>Lucro</th><th>Telegram</th></tr>
+      <template x-for="s in sinais" :key="s.id">
+        <tr>
+          <td x-text="fmtDataHora(s.inicio)"></td><td x-text="meta.ligas[s.liga]"></td>
+          <td x-text="s.time_casa + ' x ' + s.time_fora"></td><td x-text="meta.mercados[s.mercado]"></td>
+          <td x-text="s.odd ? s.odd.toFixed(2) : '-'"></td><td class="pequeno" x-text="s.regra"></td>
+          <td x-text="s.placar || '-'"></td>
+          <td><span :class="s.status === 'green' ? 'green' : s.status === 'red' ? 'red' : 'suave'" x-text="{green:'GREEN',red:'RED',pendente:'Aguardando',anulado:'Anulado'}[s.status]"></span></td>
+          <td :class="clsNum(s.lucro)" x-text="s.lucro != null ? s.lucro.toFixed(2) : '-'"></td>
+          <td x-text="s.enviado ? 'Sim' : '-'"></td>
+        </tr>
+      </template>
+    </table>
+    <p class="suave pequeno" x-show="!sinais.length">Nenhum sinal ainda. Eles aparecem quando uma regra ligada encontra um jogo.</p>
+  </div>
+</section>
+
+<!-- ================= ESTATÍSTICAS ================= -->
+<section x-show="aba === 'estatisticas'">
+  <h2>Estatísticas por liga e mercado</h2>
+  <div class="linha" style="margin-bottom:12px">
+    <div style="max-width:260px"><label>Mostrar</label>
+      <select x-model="metricaPanorama">
+        <option value="taxa">% de vezes que o mercado saiu</option>
+        <option value="roi">Retorno apostando em todos os jogos</option>
+        <option value="odd">Odd média</option>
+      </select></div>
+  </div>
+  <div class="cartao rolagem">
+    <table>
+      <tr><th>Mercado</th><template x-for="l in panorama" :key="l.liga"><th x-text="l.nome + ' (' + l.jogos + ')'"></th></template></tr>
+      <template x-for="(n, k) in meta.mercados" :key="k">
+        <tr><td x-text="n"></td>
+          <template x-for="l in panorama" :key="l.liga">
+            <td :class="metricaPanorama === 'roi' ? clsNum(l.mercados[k]?.roi) : ''" x-text="celula(l.mercados[k])"></td>
+          </template></tr>
+      </template>
+    </table>
+  </div>
+  <p class="suave pequeno">O "retorno apostando em todos" mostra a margem da casa em cada mercado. Números negativos são o normal.</p>
+</section>
+
+<!-- ================= JOGOS ================= -->
+<section x-show="aba === 'jogos'">
+  <h2>Últimos jogos</h2>
+  <div class="linha" style="margin-bottom:12px">
+    <div style="max-width:220px"><label>Liga</label>
+      <select x-model="jogosLiga" @change="carregarJogos()">
+        <template x-for="(n, k) in meta.ligas" :key="k"><option :value="k" x-text="n" :selected="k === jogosLiga"></option></template>
+      </select></div>
+    <div style="max-width:260px"><label>Colorir por mercado</label>
+      <select x-model="jogosMercado">
+        <template x-for="(n, k) in meta.mercados" :key="k"><option :value="k" x-text="n" :selected="k === jogosMercado"></option></template>
+      </select></div>
+    <div class="fixo"><button class="btn sec" @click="carregarJogos()">Atualizar</button></div>
+  </div>
+  <template x-if="jogosDados">
+    <div>
+      <div class="cartao" x-show="jogosDados.proximas.length">
+        <h3>Próximos jogos</h3>
+        <template x-for="p in jogosDados.proximas" :key="p.id">
+          <div class="pequeno"><b x-text="fmtHora(p.inicio)"></b> · <span x-text="p.time_casa + ' x ' + p.time_fora"></span>
+            <span class="suave" x-text="p.odds[meta.oddCampos[jogosMercado]] ? ' · odd ' + p.odds[meta.oddCampos[jogosMercado]] : ''"></span></div>
+        </template>
+      </div>
+      <div class="cartao">
+        <div class="placar">
+          <template x-for="j in jogosDados.jogos" :key="j.id">
+            <div class="jogo" :class="bateuMercado(j, jogosMercado) ? 'sim' : 'nao'" :title="j.time_casa + ' x ' + j.time_fora">
+              <span x-text="fmtHora(j.inicio)"></span><b x-text="j.gc + '-' + j.gf"></b>
+              <span class="suave" x-text="j.gc_ht != null ? '1ºT ' + j.gc_ht + '-' + j.gf_ht : ''"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+</section>
+
+<!-- ================= IA ================= -->
+<section x-show="aba === 'ia'">
+  <h2>Laboratório de IA</h2>
+  <div class="cartao">
+    <p class="suave" style="margin-top:0">Um modelo de aprendizado de máquina (regressão logística) aprende com a 1ª metade dos jogos,
+      usando a odd, a frequência recente do mercado, sequências, minuto e liga. Depois é testado na 2ª metade, contra a própria odd da casa.</p>
+    <div class="linha">
+      <div style="max-width:260px"><label>Mercado</label>
+        <select x-model="ia.mercado">
+          <template x-for="(n, k) in meta.mercados" :key="k"><option :value="k" x-text="n" :selected="k === ia.mercado"></option></template>
+        </select></div>
+      <div class="fixo" style="width:180px"><label>Vantagem mínima p/ entrar (%)</label><input type="number" min="0" max="30" x-model="ia.margem"></div>
+      <div class="fixo"><button class="btn" @click="rodarIA()" :disabled="ia.carregando" x-text="ia.carregando ? 'Treinando...' : 'Treinar e testar'"></button></div>
+    </div>
+  </div>
+  <template x-if="ia.res">
+    <div class="cartao">
+      <template x-if="ia.res.erro"><div class="aviso" x-text="ia.res.erro"></div></template>
+      <template x-if="!ia.res.erro">
+        <div>
+          <div :class="ia.res.iaPreveMelhorQueOdds ? 'ok' : 'aviso'" style="margin-bottom:12px"
+            x-text="ia.res.iaPreveMelhorQueOdds ? 'A IA previu um pouco melhor que as odds nos jogos de teste. Confira se isso se mantém com mais dados.' : 'A IA NÃO conseguiu prever melhor que as odds da casa nos jogos de teste.'"></div>
+          <div class="grade">
+            <div><div class="rotulo">Jogos de treino / teste</div><div class="numero" style="font-size:18px" x-text="ia.res.treinoJogos + ' / ' + ia.res.testeJogos"></div></div>
+            <div><div class="rotulo">Erro da IA (log-loss)</div><div class="numero" style="font-size:18px" x-text="ia.res.logLossIA"></div></div>
+            <div><div class="rotulo">Erro das odds (log-loss)</div><div class="numero" style="font-size:18px" x-text="ia.res.logLossOdds"></div></div>
+            <div><div class="rotulo">Entradas da IA no teste</div><div class="numero" style="font-size:18px" x-text="ia.res.entradasNoTeste.n"></div>
+              <div class="pequeno"><span x-text="(ia.res.entradasNoTeste.taxa ?? '-') + '% de acerto · '"></span>
+                <span :class="clsNum(ia.res.entradasNoTeste.roi)" x-text="'ROI ' + (ia.res.entradasNoTeste.roi ?? '-') + '%'"></span></div></div>
+          </div>
+          <p class="suave pequeno">Log-loss mede o erro das previsões: quanto menor, melhor. Se o da IA não for menor que o das odds, ela não sabe mais que a casa.</p>
+        </div>
+      </template>
+    </div>
+  </template>
+</section>
+
+<!-- ================= CONFIGURAÇÕES ================= -->
+<section x-show="aba === 'config'">
+  <h2>Configurações</h2>
+  <template x-if="status">
+    <div>
+      <div class="cartao">
+        <h3>Conexão com o TsonTips</h3>
+        <p class="pequeno" :class="status.sessao.configurada ? 'pos' : 'neg'"
+          x-text="status.sessao.configurada ? 'Conectado' + (status.sessao.usuario ? ' como ' + status.sessao.usuario : '') + ' · token válido até ' + fmtDataHora(status.sessao.expiraEm) + ' (renova sozinho)' : 'Não conectado'"></p>
+        <details class="suave pequeno" style="margin-bottom:10px"><summary>Como pegar o cookie</summary>
+          <ol>
+            <li>No Chrome, abra uma <b>janela anônima</b> (Ctrl+Shift+N) e faça login no TsonTips.</li>
+            <li>Aperte <b>F12</b> → aba <b>Application</b> (Aplicativo) → <b>Cookies</b> → <b>https://tsontips.com.br</b>.</li>
+            <li>Copie o <b>Value</b> do cookie <code>sb-supabase-auth-token</code> (começa com <code>base64-</code>) e cole abaixo.</li>
+            <li>Opcional: copie também o valor do cookie <code>_ch</code>.</li>
+            <li>Feche a janela anônima <b>sem clicar em sair</b> (sair derruba a sessão do robô).</li>
+          </ol>
+        </details>
+        <div class="campo"><label>Cookie sb-supabase-auth-token</label><textarea x-model="cfg.cookie" placeholder="base64-..."></textarea></div>
+        <div class="campo"><label>Cookie _ch (opcional)</label><input x-model="cfg.ch"></div>
+        <button class="btn" @click="salvarSessao()" :disabled="!cfg.cookie">Conectar</button>
+      </div>
+
+      <div class="cartao">
+        <h3>Telegram</h3>
+        <p class="pequeno" :class="status.telegram.token ? 'pos' : 'neg'" x-text="status.telegram.token ? 'Token do bot configurado' : 'Falta TELEGRAM_BOT_TOKEN no .env'"></p>
+        <p class="suave pequeno">Mande <code>/start</code> para o seu bot no Telegram. Ele responde com o ID do chat. Cole abaixo. Para grupo, adicione o bot ao grupo e mande <code>/id</code> lá.</p>
+        <div class="linha">
+          <div><label>Chat ID</label><input x-model="cfg.chat"></div>
+          <div class="fixo"><button class="btn" @click="salvarChat()">Salvar</button></div>
+          <div class="fixo"><button class="btn sec" @click="testarTelegram()">Enviar teste</button></div>
+          <div class="fixo"><button class="btn sec" @click="relatorioAgora()">Relatório de hoje</button></div>
+        </div>
+        <div style="margin-top:14px">
+          <label><input type="checkbox" style="width:auto" :checked="status.exigirAprovacao" @change="alternarAprovacao()">
+            Só enviar no Telegram regras <b>aprovadas</b> no teste (recomendado)</label>
+          <p class="suave pequeno">Desmarcando, qualquer regra em modo Telegram envia sinais, mesmo reprovada.</p>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h3>Trocar senha do painel</h3>
+        <div class="linha">
+          <div><label>Senha atual</label><input type="password" x-model="cfg.senhaAtual"></div>
+          <div><label>Nova senha</label><input type="password" x-model="cfg.senhaNova"></div>
+          <div class="fixo"><button class="btn" @click="trocarSenha()">Alterar</button></div>
+        </div>
+      </div>
+
+      <div class="cartao rolagem">
+        <h3>Registro do sistema</h3>
+        <table>
+          <template x-for="l in status.logs" :key="l.id">
+            <tr><td class="pequeno suave" x-text="fmtDataHora(l.em.replace(' ', 'T') + 'Z')"></td>
+              <td class="pequeno" :class="l.nivel === 'erro' && 'neg'" x-text="l.mensagem" style="white-space:normal"></td></tr>
+          </template>
+        </table>
+      </div>
+    </div>
+  </template>
+</section>
+
+</main>
+
+<div class="toast" x-show="toastMsg" x-transition x-text="toastMsg"></div>
+</body>
+</html>

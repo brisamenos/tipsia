@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entrar · Laboratório de Sinais</title>
+  <link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+  <div class="login-caixa cartao">
+    <div class="logo" style="font-size:20px;margin-bottom:4px">LAB <span>SINAIS</span></div>
+    <p class="suave" style="margin-top:0">Futebol virtual Kiron · painel privado</p>
+    <form id="f">
+      <div class="campo">
+        <label for="u">Usuário</label>
+        <input id="u" autocomplete="username" required>
+      </div>
+      <div class="campo">
+        <label for="s">Senha</label>
+        <input id="s" type="password" autocomplete="current-password" required>
+      </div>
+      <div id="msg" class="erro" style="display:none;margin-bottom:12px"></div>
+      <button class="btn" style="width:100%">Entrar</button>
+    </form>
+  </div>
+  <script>
+    document.getElementById('f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('msg');
+      msg.style.display = 'none';
+      const r = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuario: document.getElementById('u').value, senha: document.getElementById('s').value }),
+      });
+      if (r.ok) return (location.href = '/');
+      const j = await r.json().catch(() => ({}));
+      msg.textContent = j.erro || 'Não foi possível entrar';
+      msg.style.display = 'block';
+    });
+  </script>
+</body>
+</html>
