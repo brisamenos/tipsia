@@ -14,6 +14,7 @@ const jogos = require('./jogos');
 const tson = require('./tsontips');
 const tg = require('./telegram');
 const robo = require('./robo');
+const descobrir = require('./descobrir');
 
 // ---------- Usuário inicial ----------
 if (!db.prepare('SELECT COUNT(*) AS n FROM usuarios').get().n) {
@@ -53,7 +54,7 @@ app.use(session({
 const exigeLogin = (req, res, next) => {
   if (req.session.usuario) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ erro: 'Faça login' });
-  return res.redirect('/login.html');
+  return res.redirect('/login.html?volta=' + encodeURIComponent(req.originalUrl));
 };
 
 const regraDaLinha = (r) => ({
@@ -90,6 +91,7 @@ app.get('/estilo.css', (req, res) => res.sendFile(path.join(PUB, 'estilo.css')))
 app.use(exigeLogin);
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(PUB, 'index.html')));
 app.get('/app.js', (req, res) => res.sendFile(path.join(PUB, 'app.js')));
+app.get('/conectar.html', (req, res) => res.sendFile(path.join(PUB, 'conectar.html')));
 
 app.get('/api/me', (req, res) => res.json({ usuario: req.session.usuario }));
 
@@ -200,6 +202,14 @@ app.get('/api/jogos', (req, res) => {
   res.json({ liga, jogos: arr.reverse(), proximas: (robo.proximas.get(liga) || []).slice(0, 5) });
 });
 
+// ---------- Descobrir padrões ----------
+app.get('/api/descobrir', (req, res) => res.json(descobrir.situacao()));
+app.post('/api/descobrir', (req, res) => {
+  if (!jogos.ligas().length) return res.status(400).json({ erro: 'Ainda não há jogos no banco. Conecte o TsonTips e aguarde a coleta.' });
+  descobrir.rodar();
+  res.json({ ok: true });
+});
+
 // ---------- IA ----------
 app.get('/api/ia/:mercado', (req, res) => {
   try { res.json(avaliarIA(req.params.mercado, Number(req.query.margem) || 0.03)); }
@@ -220,7 +230,8 @@ app.post('/api/config/sessao', async (req, res) => {
     await tson.api('/api/me/plan?date=' + new Date().toISOString().slice(0, 10));
     res.json({ ok: true, sessao: tson.infoSessao() });
   } catch (e) {
-    res.status(400).json({ erro: e.message });
+    const msg = e.message === 'fetch failed' ? 'O servidor não conseguiu acessar o TsonTips. Tente de novo em alguns minutos.' : e.message;
+    res.status(400).json({ erro: msg });
   }
 });
 
@@ -245,4 +256,7 @@ app.listen(porta, () => {
   log('info', `Painel rodando na porta ${porta}`);
   if (process.env.SEM_ROBO !== '1') robo.iniciar();
   else jogos.carregar();
+  // atualiza a descoberta de padrões sozinho: 3 min depois de ligar e a cada 6 horas
+  setTimeout(() => { if (jogos.ligas().length) descobrir.rodar(); }, 3 * 60000);
+  setInterval(() => { if (jogos.ligas().length) descobrir.rodar(); }, 6 * 3600e3);
 });

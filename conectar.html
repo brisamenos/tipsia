@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conectar TsonTips · Laboratório de Sinais</title>
+  <link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+  <div class="login-caixa cartao" style="max-width:440px">
+    <div class="logo" style="font-size:20px;margin-bottom:8px">LAB <span>SINAIS</span></div>
+    <div id="status" class="aviso">Aguardando a sessão do TsonTips...</div>
+    <p class="suave pequeno" id="dica">Esta janela foi aberta pelo botão "Conectar ao Lab Sinais". Se nada acontecer em alguns segundos, volte ao TsonTips (logado) e toque no botão de novo.</p>
+    <a class="btn" href="/" id="voltar" style="display:none;text-decoration:none;text-align:center">Ir para o painel</a>
+  </div>
+  <script>
+    const ORIGEM_TSON = 'https://tsontips.com.br';
+    let feito = false;
+    const st = document.getElementById('status');
+
+    window.addEventListener('message', async (e) => {
+      if (feito || e.origin !== ORIGEM_TSON) return;
+      const d = e.data || {};
+      if (d.tipo !== 'tson' || !d.cookie) return;
+      feito = true;
+      st.className = 'aviso';
+      st.textContent = 'Recebi a sessão. Conectando...';
+      try {
+        const r = await fetch('/api/config/sessao', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cookie: d.cookie, ch: d.ch || '' }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.erro || 'Falha ao conectar');
+        st.className = 'ok';
+        st.innerHTML = '<b>Conectado!</b> O robô já vai começar a coletar os jogos.';
+        document.getElementById('dica').textContent = 'No TsonTips, essa aba vai pedir login de novo. É normal: a sessão foi passada para o robô. Pode entrar de novo quando quiser usar o site.';
+        document.getElementById('voltar').style.display = 'block';
+        if (e.source) e.source.postMessage('lab-ok', ORIGEM_TSON);
+      } catch (err) {
+        feito = false;
+        st.className = 'erro';
+        st.textContent = err.message;
+        if (e.source) e.source.postMessage('lab-erro', ORIGEM_TSON);
+      }
+    });
+  </script>
+</body>
+</html>

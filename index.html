@@ -13,7 +13,7 @@
 <header class="topo">
   <div class="logo">LAB <span>SINAIS</span></div>
   <nav class="abas">
-    <template x-for="[k, n] in [['inicio','Início'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
+    <template x-for="[k, n] in [['inicio','Início'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
       <button class="aba" :class="aba === k && 'ativa'" @click="ir(k)" x-text="n"></button>
     </template>
   </nav>
@@ -67,6 +67,77 @@
           No futebol virtual, os jogos são sorteados por algoritmo e a odd já tem margem da casa, então a maioria das regras será reprovada. Isso é esperado.</p>
       </div>
     </div>
+  </template>
+</section>
+
+<!-- ================= DESCOBRIR ================= -->
+<section x-show="aba === 'descobrir'">
+  <div class="linha" style="margin-bottom:14px">
+    <h2 style="margin:0">Descobrir padrões</h2>
+    <div class="fixo"><button class="btn" @click="iniciarDescoberta()" :disabled="descoberta?.rodando"
+      x-text="descoberta?.rodando ? 'Analisando...' : 'Analisar agora'"></button></div>
+  </div>
+  <div class="cartao">
+    <p class="suave" style="margin:0">O sistema cria e testa sozinho centenas de ideias em <b>todos os mercados e ligas</b>:
+      sequências, frequência nos últimos 10 jogos, placar e gols do jogo anterior e faixas de odd.
+      As melhores são escolhidas olhando só a <b>1ª metade</b> dos jogos (treino) e depois conferidas na <b>2ª metade</b> (teste).
+      Roda sozinho a cada 6 horas. Toque em <b>Observar</b> para acompanhar uma ideia, ou <b>Telegram</b> para receber os sinais.</p>
+  </div>
+
+  <template x-if="descoberta?.rodando">
+    <div class="cartao">
+      <div class="rotulo">Testando ideias</div>
+      <div class="numero" x-text="descoberta.progresso + ' / ' + descoberta.total"></div>
+      <div style="height:8px;background:var(--fundo);border-radius:99px;overflow:hidden;margin-top:8px">
+        <div style="height:100%;background:var(--primaria)" :style="'width:' + (descoberta.total ? descoberta.progresso / descoberta.total * 100 : 0) + '%'"></div>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="descoberta?.resultado">
+    <div>
+      <div class="grade" style="margin-top:14px">
+        <div class="cartao"><div class="rotulo">Ideias testadas</div><div class="numero" x-text="descoberta.resultado.testadas.toLocaleString('pt-BR')"></div>
+          <div class="suave pequeno" x-text="'Atualizado em ' + fmtDataHora(descoberta.resultado.em)"></div></div>
+        <div class="cartao"><div class="rotulo">Lucraram no treino</div><div class="numero" x-text="descoberta.resultado.lucraramTreino"></div>
+          <div class="suave pequeno">pareciam boas olhando o passado</div></div>
+        <div class="cartao"><div class="rotulo">Continuaram lucrando no teste</div><div class="numero" x-text="descoberta.resultado.continuaram"></div>
+          <div class="suave pequeno" x-text="descoberta.resultado.lucraramTreino ? Math.round(descoberta.resultado.continuaram / descoberta.resultado.lucraramTreino * 100) + '% das que pareciam boas' : ''"></div></div>
+        <div class="cartao"><div class="rotulo">Aprovadas</div><div class="numero" :class="descoberta.resultado.aprovadas ? 'green' : ''" x-text="descoberta.resultado.aprovadas"></div>
+          <div class="suave pequeno">lucro + amostra grande + confiança</div></div>
+      </div>
+
+      <div class="aviso" style="margin-top:14px">Com centenas de ideias testadas, algumas passam no teste por pura sorte. Antes de apostar,
+        deixe a ideia em <b>Observar</b> e acompanhe a coluna <b>Ao vivo</b> na aba Regras por alguns dias.</div>
+
+      <div class="chips" style="margin:14px 0">
+        <span class="chip" :class="abaDescoberta === 'sustentaram' && 'on'" @click="abaDescoberta = 'sustentaram'">Lucraram no treino e no teste</span>
+        <span class="chip" :class="abaDescoberta === 'ranking' && 'on'" @click="abaDescoberta = 'ranking'">Melhores do treino (o que o passado sugere)</span>
+      </div>
+
+      <div class="cartao rolagem">
+        <table>
+          <tr><th>Ideia</th><th>Treino</th><th>Teste</th><th>Status</th><th></th></tr>
+          <template x-for="(r, i) in descoberta.resultado[abaDescoberta]" :key="i">
+            <tr>
+              <td class="quebra"><b x-text="r.nome"></b></td>
+              <td><span x-text="r.treino.taxa + '%'"></span>
+                <div class="pequeno" :class="clsNum(r.treino.roi)" x-text="r.treino.n + ' entradas · ROI ' + r.treino.roi + '%'"></div></td>
+              <td><span x-text="r.teste.n ? r.teste.taxa + '%' : '-'"></span>
+                <div class="pequeno" :class="clsNum(r.teste.roi)" x-text="r.teste.n ? r.teste.n + ' entradas · ROI ' + r.teste.roi + '%' : ''"></div></td>
+              <td><span class="selo" :class="'s-' + r.status.codigo" x-text="r.status.texto.split(':')[0]"></span></td>
+              <td><button class="btn sec peq" @click="ativarIdeia(r, 'observacao')">Observar</button>
+                <button class="btn peq" @click="ativarIdeia(r, 'telegram')">Telegram</button></td>
+            </tr>
+          </template>
+        </table>
+        <p class="suave pequeno" x-show="!descoberta.resultado[abaDescoberta].length">Nenhuma ideia nesta lista. No futebol virtual isso é comum: a margem da casa engole os padrões.</p>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="descoberta && !descoberta.rodando && !descoberta.resultado">
+    <div class="cartao" style="margin-top:14px"><p class="suave" style="margin:0">Ainda não há análise. Conecte o TsonTips, espere a primeira coleta e toque em <b>Analisar agora</b>.</p></div>
   </template>
 </section>
 
@@ -342,20 +413,35 @@
     <div>
       <div class="cartao">
         <h3>Conexão com o TsonTips</h3>
-        <p class="pequeno" :class="status.sessao.configurada ? 'pos' : 'neg'"
-          x-text="status.sessao.configurada ? 'Conectado' + (status.sessao.usuario ? ' como ' + status.sessao.usuario : '') + ' · token válido até ' + fmtDataHora(status.sessao.expiraEm) + ' (renova sozinho)' : 'Não conectado'"></p>
-        <details class="suave pequeno" style="margin-bottom:10px"><summary>Como pegar o cookie</summary>
-          <ol>
-            <li>No Chrome, abra uma <b>janela anônima</b> (Ctrl+Shift+N) e faça login no TsonTips.</li>
-            <li>Aperte <b>F12</b> → aba <b>Application</b> (Aplicativo) → <b>Cookies</b> → <b>https://tsontips.com.br</b>.</li>
-            <li>Copie o <b>Value</b> do cookie <code>sb-supabase-auth-token</code> (começa com <code>base64-</code>) e cole abaixo.</li>
-            <li>Opcional: copie também o valor do cookie <code>_ch</code>.</li>
-            <li>Feche a janela anônima <b>sem clicar em sair</b> (sair derruba a sessão do robô).</li>
+        <p :class="status.sessao.configurada ? 'ok' : 'erro'" style="margin-top:0"
+          x-text="status.sessao.configurada ? 'Conectado' + (status.sessao.usuario ? ' como ' + status.sessao.usuario : '') + '. A conexão se renova sozinha.' : 'Não conectado'"></p>
+
+        <p style="margin-bottom:6px"><b>Conectar com 1 toque</b></p>
+        <p class="suave pequeno" style="margin-top:0">O login do TsonTips tem verificação anti-robô, então o sistema não pode entrar sozinho com e-mail e senha.
+          Em vez disso, você faz login no site normalmente e toca no favorito abaixo. Ele passa a sessão para cá.</p>
+
+        <div class="campo"><label>No computador</label>
+          <ol class="suave pequeno" style="margin:4px 0 10px">
+            <li>Arraste este botão para a barra de favoritos: <a class="btn peq" :href="linkConectar()" @click.prevent="toast('Arraste o botão para a barra de favoritos')" style="text-decoration:none">Conectar ao Lab Sinais</a></li>
+            <li>Entre no TsonTips e faça login.</li>
+            <li>Clique no favorito <b>Conectar ao Lab Sinais</b>. Abre uma janela confirmando a conexão.</li>
           </ol>
+        </div>
+        <div class="campo"><label>No celular (Chrome)</label>
+          <ol class="suave pequeno" style="margin:4px 0 10px">
+            <li>Toque em <button class="btn sec peq" @click="copiarLink()">Copiar código do favorito</button></li>
+            <li>No Chrome, salve qualquer página nos favoritos (⋮ → ☆). Depois edite esse favorito: nome <b>labsinais</b> e, no endereço, apague tudo e cole o código.</li>
+            <li>Entre no TsonTips e faça login. Na barra de endereço, digite <b>labsinais</b> e toque no favorito que aparecer.</li>
+          </ol>
+        </div>
+
+        <details class="suave pequeno"><summary>Avançado: colar o cookie manualmente</summary>
+          <div style="margin-top:10px">
+            <div class="campo"><label>Cookie sb-supabase-auth-token</label><textarea x-model="cfg.cookie" placeholder="base64-..."></textarea></div>
+            <div class="campo"><label>Cookie _ch (opcional)</label><input x-model="cfg.ch"></div>
+            <button class="btn" @click="salvarSessao()" :disabled="!cfg.cookie">Conectar</button>
+          </div>
         </details>
-        <div class="campo"><label>Cookie sb-supabase-auth-token</label><textarea x-model="cfg.cookie" placeholder="base64-..."></textarea></div>
-        <div class="campo"><label>Cookie _ch (opcional)</label><input x-model="cfg.ch"></div>
-        <button class="btn" @click="salvarSessao()" :disabled="!cfg.cookie">Conectar</button>
       </div>
 
       <div class="cartao">

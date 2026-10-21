@@ -53,6 +53,7 @@ function painel() {
       if (aba === 'regras') this.carregarRegras();
       if (aba === 'sinais') this.carregarSinais();
       if (aba === 'estatisticas') this.panorama = await api('/api/panorama');
+      if (aba === 'descobrir') this.carregarDescoberta();
       if (aba === 'jogos') this.carregarJogos();
       if (aba === 'config') { await this.carregarStatus(); this.cfg.chat = this.status.telegram.chatId || ''; }
     },
@@ -182,6 +183,56 @@ function painel() {
         casa: j.gc > j.gf, empate: j.gc === j.gf, fora: j.gf > j.gc, ht_empate: j.gc_ht != null && j.gc_ht === j.gf_ht,
         casa_marca: j.gc > 0, fora_marca: j.gf > 0, gols_impar: t % 2 === 1, gols_par: t % 2 === 0,
       })[m];
+    },
+
+    // ---- Conexão em 1 clique (favorito que roda dentro do TsonTips)
+    linkConectar() {
+      const painel = location.origin;
+      const js = `(function(){
+if(location.hostname.indexOf('tsontips.com.br')<0){alert('Abra o TsonTips (já logado) e toque neste favorito de novo.');return;}
+var cs=document.cookie.split('; '),partes=[],ch='';
+cs.forEach(function(x){var i=x.indexOf('='),k=x.slice(0,i),v=x.slice(i+1);
+if(k==='sb-supabase-auth-token')partes.push([-1,v]);
+else if(k.indexOf('sb-supabase-auth-token.')===0)partes.push([+k.split('.').pop(),v]);
+if(k==='_ch')ch=v;});
+partes.sort(function(a,b){return a[0]-b[0]});
+var t=partes.map(function(p){return p[1]}).join('');
+if(!t){alert('Você não está logado no TsonTips. Faça login e toque no favorito de novo.');return;}
+var w=window.open('${painel}/conectar.html','labsinais');
+if(!w){alert('O navegador bloqueou a janela. Permita pop-ups para o TsonTips e tente de novo.');return;}
+var n=0,iv=setInterval(function(){n++;try{w.postMessage({tipo:'tson',cookie:t,ch:ch},'${painel}')}catch(e){}if(n>150)clearInterval(iv);},400);
+window.addEventListener('message',function(e){if(e.origin!=='${painel}')return;
+if(e.data==='lab-ok'){clearInterval(iv);
+document.cookie.split('; ').forEach(function(x){var k=x.split('=')[0];if(k.indexOf('sb-')===0){
+document.cookie=k+'=; Max-Age=0; path=/';document.cookie=k+'=; Max-Age=0; path=/; domain=.tsontips.com.br';}});
+alert('Pronto! Sessão enviada para o Lab Sinais. Este navegador vai pedir login no TsonTips de novo, é normal.');}});
+})();`;
+      return 'javascript:' + encodeURIComponent(js.replace(/\n/g, ''));
+    },
+    async copiarLink() {
+      try { await navigator.clipboard.writeText(this.linkConectar()); this.toast('Código do favorito copiado'); }
+      catch { this.toast('Não consegui copiar. Segure o botão e copie o link.'); }
+    },
+
+    // ---- Descobrir padrões
+    descoberta: null,
+    abaDescoberta: 'sustentaram',
+    async carregarDescoberta() { this.descoberta = await api('/api/descobrir'); },
+    async iniciarDescoberta() {
+      try { await api('/api/descobrir', { method: 'POST' }); }
+      catch (e) { return this.toast(e.message); }
+      const t = setInterval(async () => {
+        await this.carregarDescoberta();
+        if (!this.descoberta.rodando) clearInterval(t);
+      }, 1500);
+      await this.carregarDescoberta();
+    },
+    async ativarIdeia(r, modo) {
+      try {
+        await api('/api/regras', { method: 'POST', body: { nome: r.nome.slice(0, 80), ligas: r.ligas, mercado: r.mercado, condicoes: r.condicoes, modo } });
+        this.toast(modo === 'telegram' ? 'Regra criada no modo Telegram' : 'Regra criada em observação');
+        this.carregarRegras();
+      } catch (e) { this.toast(e.message); }
     },
 
     // ---- Config

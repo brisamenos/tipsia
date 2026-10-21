@@ -32,7 +32,10 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ usuario: document.getElementById('u').value, senha: document.getElementById('s').value }),
       });
-      if (r.ok) return (location.href = '/');
+      if (r.ok) {
+        const v = new URLSearchParams(location.search).get('volta') || '/';
+        return (location.href = v.startsWith('/') && !v.startsWith('//') ? v : '/');
+      }
       const j = await r.json().catch(() => ({}));
       msg.textContent = j.erro || 'Não foi possível entrar';
       msg.style.display = 'block';

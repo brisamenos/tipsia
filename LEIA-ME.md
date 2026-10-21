@@ -19,7 +19,8 @@ tson-sinais/
 ├── mercados.js    → ligas e mercados
 ├── jogos.js       → cache dos jogos em memória
 ├── db.js          → banco SQLite
-├── index.html, login.html, app.js, estilo.css → telas do painel
+├── descobrir.js   → descoberta automática de padrões
+├── index.html, login.html, conectar.html, app.js, estilo.css → telas do painel
 ```
 
 O banco fica em `/app/data` (volume da EasyPanel).
@@ -43,13 +44,25 @@ O banco fica em `/app/data` (volume da EasyPanel).
 
 ## 3. Conectar o TsonTips
 
-1. No Chrome, abra uma **janela anônima** (Ctrl+Shift+N) e faça login no TsonTips.
-2. **F12** → aba **Application** → **Cookies** → `https://tsontips.com.br`.
-3. Copie o valor de `sb-supabase-auth-token` (começa com `base64-`).
-4. No painel: **Configurações → Conexão com o TsonTips**, cole e clique em **Conectar**.
-5. Feche a janela anônima **sem clicar em sair**.
+O login do TsonTips tem verificação anti-robô, então o sistema não entra sozinho com e-mail e senha. A conexão é feita com 1 toque:
 
-Na primeira coleta o robô puxa os últimos 5 dias (120h). Depois, coleta a cada minuto e renova a sessão sozinho. Se a sessão cair, o bot avisa no Telegram.
+1. No painel, vá em **Configurações → Conexão com o TsonTips**.
+2. **Computador:** arraste o botão **Conectar ao Lab Sinais** para a barra de favoritos.
+   **Celular:** toque em **Copiar código do favorito**, salve um favorito no Chrome com o nome `labsinais` e cole o código no endereço.
+3. Faça login no TsonTips normalmente.
+4. Toque no favorito. Abre uma janela do painel confirmando **Conectado!**
+
+O TsonTips vai pedir login de novo naquele navegador: é normal, a sessão foi passada para o robô. Depois disso, a conexão se renova sozinha. Se cair, o bot avisa no Telegram e é só repetir os passos 3 e 4.
+
+Na primeira coleta o robô puxa os últimos 5 dias (120h).
+
+## 3.1 Descobrir padrões
+
+Na aba **Descobrir padrões**, toque em **Analisar agora** (ou espere: roda sozinho a cada 6 horas). O sistema testa milhares de ideias em todos os mercados e ligas e mostra:
+- **Lucraram no treino e no teste**: as que se sustentaram nas duas metades do histórico.
+- **Melhores do treino**: o que o passado sugere, para comparar com o que aconteceu depois.
+
+Toque em **Observar** para virar uma regra que registra sinais sem enviar, ou **Telegram** para receber os sinais.
 
 ## 4. Conectar o Telegram
 

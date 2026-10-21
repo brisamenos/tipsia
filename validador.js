@@ -6,7 +6,6 @@ const { avaliar, ligasDaRegra } = require('./regras');
 const jogos = require('./jogos');
 const { db } = require('./db');
 
-const JANELA_HIST = 60; // quantos jogos anteriores a regra pode olhar
 
 function estatisticas(entradas) {
   const n = entradas.length;
@@ -51,8 +50,7 @@ function simular(regra) {
     for (let i = 1; i < arr.length; i++) {
       // só vale se o alvo é o jogo logo depois do último resultado conhecido
       if (arr[i].t - arr[i - 1].t > intervalo * 1.6) continue;
-      const hist = arr.slice(Math.max(0, i - JANELA_HIST), i);
-      if (!avaliar(regra, hist, arr[i])) continue;
+      if (!avaliar(regra, arr, arr[i], i)) continue;
       entradas.push({ t: arr[i].t, liga, acerto: bateu(arr[i], regra.mercado), odd: oddDo(arr[i], regra.mercado) });
     }
   }
@@ -121,4 +119,4 @@ function panorama() {
   return out;
 }
 
-module.exports = { backtest, panorama, estatisticas };
+module.exports = { backtest, panorama, estatisticas, classificar };

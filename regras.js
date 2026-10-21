@@ -30,36 +30,38 @@ function listaNumeros(v) {
 
 // hist: jogos anteriores da mesma liga (do mais antigo ao mais recente)
 // alvo: { minuto, hora, odds, ... }
-function avaliar(regra, hist, alvo) {
+// fim (opcional): usa só hist[0..fim-1], evita copiar arrays no backtest
+function avaliar(regra, hist, alvo, fim) {
   if (!regra.condicoes || !regra.condicoes.length) return false;
+  const L = fim ?? hist.length;
   for (const c of regra.condicoes) {
     switch (c.tipo) {
       case 'sequencia': {
         const n = Number(c.n) || 1;
-        if (hist.length < n || !MERCADOS[c.mercado]) return false;
+        if (L < n || !MERCADOS[c.mercado]) return false;
         const querido = c.valor !== false && c.valor !== 'false';
         for (let k = 1; k <= n; k++) {
-          if (bateu(hist[hist.length - k], c.mercado) !== querido) return false;
+          if (bateu(hist[L - k], c.mercado) !== querido) return false;
         }
         break;
       }
       case 'frequencia': {
         const n = Number(c.n) || 10;
-        if (hist.length < n || !MERCADOS[c.mercado]) return false;
+        if (L < n || !MERCADOS[c.mercado]) return false;
         let qtd = 0;
-        for (let k = 1; k <= n; k++) if (bateu(hist[hist.length - k], c.mercado)) qtd++;
+        for (let k = 1; k <= n; k++) if (bateu(hist[L - k], c.mercado)) qtd++;
         if (!comparar(qtd, c.op || '>=', Number(c.qtd))) return false;
         break;
       }
       case 'placar_anterior': {
-        const u = hist[hist.length - 1];
+        const u = hist[L - 1];
         if (!u) return false;
         const lista = String(c.placar || '').split(/[,;\s]+/).filter(Boolean);
         if (!lista.includes(`${u.gc}-${u.gf}`)) return false;
         break;
       }
       case 'gols_anterior': {
-        const u = hist[hist.length - 1];
+        const u = hist[L - 1];
         if (!u || !comparar(u.gc + u.gf, c.op || '>=', Number(c.qtd))) return false;
         break;
       }
