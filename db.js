@@ -84,6 +84,9 @@ addCol('sinais', 'historico', 'TEXT');                 // JSON com o resultado d
 addCol('sinais', 'texto', 'TEXT');                     // texto original da mensagem no Telegram
 addCol('sinais', 'chat_id', 'TEXT');
 addCol('sinais', 'odd_atual', 'REAL');
+addCol('sinais', 'duplicado_de', 'INTEGER');          // sinal repetido (mesmo jogo + mercado) que não foi enviado
+addCol('regras', 'substitui', 'INTEGER');             // sugestão da IA para trocar esta regra
+addCol('regras', 'pausada_por', 'TEXT');              // 'stop' quando o stop automático pausou
 
 function getConfig(chave, padrao = null) {
   const r = db.prepare('SELECT valor FROM config WHERE chave = ?').get(chave);

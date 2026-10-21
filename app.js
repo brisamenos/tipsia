@@ -249,6 +249,21 @@ window.addEventListener('message',window.__lab);
         this.carregarIA();
       } catch (e) { this.toast(e.message); }
     },
+    async revisarIA() {
+      this.iaPedindo = true;
+      try {
+        const r = await api('/api/ia-sinais/revisar', { method: 'POST' });
+        this.toast(r.criadas ? `A IA deixou ${r.criadas} sugestão(ões) para você aprovar` : 'Revisão feita: nada precisou de troca');
+        this.iaFiltro = 'pendente';
+        await this.carregarIA();
+      } catch (e) { this.toast(e.message); }
+      this.iaPedindo = false;
+    },
+    async aprovarTroca(r) {
+      await api(`/api/regras/${r.id}/aprovar-troca`, { method: 'POST' });
+      this.toast(r.substitui ? 'Troca aprovada: a nova entrou no Telegram e a antiga foi pausada' : 'Aprovada: os sinais vão para o Telegram');
+      this.carregarIA();
+    },
     async pedirIA() {
       this.iaPedindo = true;
       try {

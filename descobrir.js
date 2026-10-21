@@ -95,6 +95,13 @@ async function rodar() {
     const sustentaram = [...passaramValidacao].sort((a, b) =>
       Math.min(b.treino.z ?? -99, b.validacao.z ?? -99) - Math.min(a.treino.z ?? -99, a.validacao.z ?? -99)).slice(0, 40);
     const continuaram = confirmaram;
+    // melhores de cada liga (usadas pela revisão da IA para cobrir ligas sem estratégia)
+    const porLiga = {};
+    for (const liga of Object.keys(LIGAS)) {
+      porLiga[liga] = passaramValidacao.filter((r) => r.ligas[0] === liga)
+        .sort((a, b) => Math.min(b.treino.z ?? -99, b.validacao.z ?? -99) - Math.min(a.treino.z ?? -99, a.validacao.z ?? -99))
+        .slice(0, 6);
+    }
 
     const res = {
       em: new Date().toISOString(),
@@ -109,6 +116,7 @@ async function rodar() {
       aprovadas: resultados.filter((r) => r.status.codigo === 'aprovada').length,
       ranking,
       sustentaram,
+      porLiga,
     };
     setConfig('descoberta', res);
     log('info', `Descobrir padrões: ${planos.length} ideias testadas, ${passaramValidacao.length} passaram na validação, ${confirmaram.length} confirmaram na prova final`);

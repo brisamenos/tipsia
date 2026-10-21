@@ -179,7 +179,7 @@ async function sugerir(pedido = '') {
         modo: 'observacao',
         tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
       };
-      if (validarEstrutura(regra).length) continue;
+      if (validarEstrutura(regra).length || jaExisteParecida(regra)) continue;
       const info = ins.run(regra.nome, JSON.stringify(regra.ligas), regra.mercado, JSON.stringify(regra.condicoes),
         regra.tiros, String(sug.justificativa || '').slice(0, 400));
       const v = backtest({ ...regra, id: info.lastInsertRowid });
@@ -200,6 +200,154 @@ async function sugerir(pedido = '') {
   }
 }
 
+// ---------- Evitar estratégias repetidas ----------
+function assinatura(r) {
+  const ligas = (typeof r.ligas === 'string' ? JSON.parse(r.ligas) : r.ligas).slice().sort().join(',');
+  const conds = (typeof r.condicoes === 'string' ? JSON.parse(r.condicoes) : r.condicoes)
+    .map((c) => `${c.tipo}:${c.mercado || ''}`).sort().join('+');
+  return `${ligas}|${r.mercado}|${conds}`;
+}
+function jaExisteParecida(regra) {
+  const a = assinatura(regra);
+  return db.prepare(`SELECT ligas, mercado, condicoes FROM regras WHERE modo IN ('telegram','observacao','pendente')`).all()
+    .some((r) => assinatura(r) === a);
+}
+
+// Cria a regra pendente, testa no histórico e só mantém se tiver lucro nas 3 partes
+function criarPendente(sug, { substitui = null, ligaObrigatoria = null } = {}) {
+  const tirosPadrao = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
+  const liga = ligaObrigatoria || (sug.liga === '*' || LIGAS[sug.liga] ? sug.liga : null);
+  if (!liga) return { ok: false, motivo: 'liga inválida' };
+  const regra = {
+    nome: String(sug.nome || 'Sinal da IA').slice(0, 80),
+    ligas: [liga],
+    mercado: sug.mercado,
+    condicoes: (sug.condicoes || []).map(limparCondicao).filter(Boolean),
+    modo: 'observacao',
+    tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
+  };
+  if (validarEstrutura(regra).length) return { ok: false, motivo: 'formato inválido' };
+  if (jaExisteParecida(regra)) return { ok: false, motivo: 'parecida com uma que já existe' };
+  const v = backtest(regra);
+  const lucraTudo = v.treino.roi > 0 && v.validacao.roi > 0 && v.prova.n >= 10 && v.prova.roi > 0;
+  if (!lucraTudo || !['aprovada', 'promissora'].includes(v.status.codigo)) return { ok: false, motivo: 'não lucrou nas 3 partes do teste' };
+  const info = db.prepare(`INSERT INTO regras (nome, ligas, mercado, condicoes, modo, tiros, origem, justificativa, substitui, validacao)
+    VALUES (?, ?, ?, ?, 'pendente', ?, 'ia', ?, ?, ?)`).run(regra.nome, JSON.stringify(regra.ligas), regra.mercado,
+    JSON.stringify(regra.condicoes), regra.tiros, String(sug.justificativa || '').slice(0, 400), substitui, JSON.stringify(v));
+  return { ok: true, id: info.lastInsertRowid, regra, v };
+}
+
+// ---------- Revisão: substitutas e cobertura de ligas ----------
+function precisamSubstituta(somenteId = null) {
+  const regras = db.prepare(`SELECT * FROM regras WHERE modo IN ('telegram','desligado')`).all();
+  const temSubstituta = new Set(db.prepare(`SELECT substitui FROM regras WHERE modo = 'pendente' AND substitui IS NOT NULL`).all().map((x) => x.substitui));
+  const out = [];
+  for (const r of regras) {
+    if (somenteId && r.id !== somenteId) continue;
+    if (temSubstituta.has(r.id)) continue;
+    const vivo = aoVivo(r.id);
+    let motivo = null;
+    if (r.modo === 'desligado' && r.pausada_por === 'stop') motivo = 'pausada pelo stop automático';
+    else if (r.modo === 'telegram' && vivo && vivo.n >= 10 && vivo.roi < 0) motivo = `fraca ao vivo (ROI ${vivo.roi}% em ${vivo.n} sinais)`;
+    if (motivo) out.push({ id: r.id, ...resumoRegra(r, vivo), motivo });
+  }
+  return out.slice(0, 5);
+}
+
+function cobertura() {
+  const ativos = db.prepare(`SELECT ligas FROM regras WHERE modo = 'telegram'`).all();
+  const c = {};
+  for (const l of Object.keys(LIGAS)) c[l] = 0;
+  for (const r of ativos) for (const l of JSON.parse(r.ligas)) {
+    if (l === '*') for (const k of Object.keys(c)) c[k]++;
+    else if (c[l] !== undefined) c[l]++;
+  }
+  return c;
+}
+
+function instrucoesRevisao() {
+  return `Você é o revisor das estratégias de futebol virtual Kiron do usuário. Nada que você propõe vai ao Telegram sem a aprovação dele.
+Tarefas:
+1) Para cada item de "precisam_substituta", proponha UMA estratégia substituta da MESMA liga (campo "substitui" = id do item).
+2) Para cada liga de "ligas_sem_estrategia", proponha no máximo UMA estratégia, escolhendo entre as "candidatas" daquela liga.
+   Se nenhuma candidata tiver ROI positivo no treino, na validação e na prova final, NÃO proponha nada para essa liga.
+Regras:
+- Não repita nem faça variações de estratégias já ativas ("estrategias_ativas") ou já sugeridas e recusadas ("suas_sugestoes_anteriores").
+- Não invente números: o sistema retesta tudo e descarta o que não lucrar nas 3 partes.
+- Prefira condições simples e amostras grandes. Use o formato de condições permitido:
+  sequencia {mercado,n,valor}, frequencia {mercado,n,op,qtd}, placar_anterior {placar}, gols_anterior {op,qtd}, minuto {valores}, hora {valores}, odd {min,max}.
+- mercado: ${Object.keys(MERCADOS).join(', ')}
+Responda APENAS com JSON:
+{"trocas":[{"substitui":<id>,"nome":"...","mercado":"...","condicoes":[...],"tiros":1,"justificativa":"..."}],
+ "novas":[{"liga":"<chave>","nome":"...","mercado":"...","condicoes":[...],"tiros":1,"justificativa":"..."}],
+ "observacoes":"2-3 frases em português"}`;
+}
+
+async function revisar(motivo = 'agendada', somenteId = null) {
+  if (!chave() || estado.rodando || !jogos.ligas().length) return null;
+  const precisam = precisamSubstituta(somenteId);
+  const cob = cobertura();
+  const desc = getConfig('descoberta') || {};
+  const ligasComTroca = new Set(precisam.flatMap((p) => p.ligas));
+  const semEstrategia = somenteId ? [] : Object.entries(cob).filter(([l, n]) => n === 0 && !ligasComTroca.has(l) && jogos.daLiga(l).length > 200).map(([liga]) => ({
+    liga, nomeLiga: LIGAS[liga],
+    candidatas: ((desc.porLiga || {})[liga] || []).filter((r) => r.prova && r.prova.roi > 0)
+      .map((r) => ({ nome: r.nome, mercado: r.mercado, condicoes: r.condicoes, tiros: r.tiros,
+        treino: { n: r.treino.n, roi: r.treino.roi }, validacao: { n: r.validacao.n, roi: r.validacao.roi }, prova_final: { n: r.prova.n, roi: r.prova.roi } })),
+  })).filter((x) => x.candidatas.length);
+  setConfig('ia_ultima_revisao', new Date().toISOString());
+  if (!precisam.length && !semEstrategia.length) {
+    setConfig('ia_revisao', { em: new Date().toISOString(), motivo, criadas: 0, observacoes: 'Nada para revisar: nenhuma estratégia precisa de troca e não há ideias lucrativas para as ligas sem cobertura.' });
+    return { criadas: 0 };
+  }
+  estado.rodando = true;
+  try {
+    const ativas = db.prepare(`SELECT * FROM regras WHERE modo IN ('telegram','observacao','pendente')`).all().map((r) => resumoRegra(r, aoVivo(r.id)));
+    const resp = await chamarOpenAI(instrucoesRevisao(), {
+      precisam_substituta: precisam, ligas_sem_estrategia: semEstrategia, estrategias_ativas: ativas,
+      suas_sugestoes_anteriores: memoria(), mudancas_recentes: mudancas().slice(0, 10),
+    });
+    const linhas = [];
+    const esc = (x) => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let criadas = 0;
+    for (const t of (resp.trocas || []).slice(0, 5)) {
+      const alvo = precisam.find((p) => p.id === Number(t.substitui));
+      if (!alvo) continue;
+      const r = criarPendente(t, { substitui: alvo.id, ligaObrigatoria: alvo.ligas[0] });
+      if (r.ok) { criadas++; linhas.push(`🔄 Troca · ${esc(LIGAS[alvo.ligas[0]] || 'Todas')}: ${esc(alvo.nome)} → <b>${esc(r.regra.nome)}</b> (prova final ROI ${r.v.prova.roi > 0 ? '+' : ''}${r.v.prova.roi}%)`); }
+    }
+    for (const n of (resp.novas || []).slice(0, 7)) {
+      if (!semEstrategia.find((x) => x.liga === n.liga)) continue;
+      const r = criarPendente(n, { ligaObrigatoria: n.liga });
+      if (r.ok) { criadas++; linhas.push(`🆕 Nova · ${esc(LIGAS[n.liga])}: <b>${esc(r.regra.nome)}</b> (prova final ROI ${r.v.prova.roi > 0 ? '+' : ''}${r.v.prova.roi}%)`); }
+    }
+    const res = { em: new Date().toISOString(), motivo, criadas, observacoes: String(resp.observacoes || '').slice(0, 800) };
+    setConfig('ia_revisao', res);
+    log('info', `Revisão da IA (${motivo}): ${criadas} sugestão(ões) aguardando aprovação`);
+    if (criadas) {
+      const tg = require('./telegram');
+      await tg.enviar(`🤖 <b>REVISÃO DA IA</b>\n\n${linhas.join('\n')}\n\nAprove ou recuse no painel, aba <b>IA Sinais</b>.`
+        + (res.observacoes ? `\n\n💬 ${esc(res.observacoes)}` : ''));
+    }
+    return res;
+  } catch (e) {
+    estado.ultimoErro = e.message;
+    log('erro', `Revisão da IA: ${e.message}`);
+    return null;
+  } finally {
+    estado.rodando = false;
+  }
+}
+
+// Aprovar uma troca: a nova entra no Telegram e a antiga é pausada
+function aprovarTroca(id) {
+  const nova = db.prepare('SELECT * FROM regras WHERE id = ?').get(id);
+  if (!nova) throw new Error('Sugestão não encontrada');
+  db.prepare(`UPDATE regras SET modo = 'telegram', pausada_por = NULL WHERE id = ?`).run(id);
+  if (nova.substitui) db.prepare(`UPDATE regras SET modo = 'desligado', pausada_por = 'troca' WHERE id = ?`).run(nova.substitui);
+  return { ok: true };
+}
+
 function situacao() {
   const k = chave();
   return {
@@ -210,9 +358,12 @@ function situacao() {
     modelo: modelo(),
     qtd: getConfig('ia_qtd', 5),
     auto: getConfig('ia_auto', false),
+    revisaoHoras: Number(getConfig('ia_revisao_horas', 6)),
+    ultimaRevisao: getConfig('ia_revisao'),
+    cobertura: cobertura(),
     ultima: getConfig('ia_ultima'),
     mudancas: mudancas().slice(0, 20),
   };
 }
 
-module.exports = { sugerir, situacao, mudancas, lembrarExcluida };
+module.exports = { sugerir, revisar, aprovarTroca, situacao, mudancas, lembrarExcluida };

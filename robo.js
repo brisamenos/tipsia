@@ -2,7 +2,7 @@
 const { db, getConfig, setConfig, log } = require('./db');
 const { LIGAS, MERCADOS, oddDo, bateu } = require('./mercados');
 const { avaliar, ligasDaRegra } = require('./regras');
-const { backtest, aoVivo } = require('./validador');
+const { backtest, aoVivo, estatRed } = require('./validador');
 const jogos = require('./jogos');
 const tson = require('./tsontips');
 const tg = require('./telegram');
@@ -95,17 +95,36 @@ const LINHA = '━━━━━━━━━━━━━━━━';
 const fmtOdd = (o) => (o ? `@${Number(o).toFixed(2)}` : '');
 
 // Dados fixos do sinal guardados no envio: assertividade e nome da estratégia
+function redsAoVivo(regraId) {
+  const rows = db.prepare(`SELECT status, inicio, alvo_inicio, historico FROM sinais
+    WHERE regra_id = ? AND status IN ('green','red') ORDER BY inicio`).all(regraId);
+  return estatRed(rows.map((r) => {
+    let fim = r.alvo_inicio || r.inicio;
+    try { const h = JSON.parse(r.historico || '[]'); if (h.length) fim = h[h.length - 1].inicio; } catch { /* ok */ }
+    return { t: Date.parse(r.inicio), tr: Date.parse(fim), acerto: r.status === 'green' };
+  }));
+}
+
 function metaDaRegra(regra) {
   const v = regra && regra.validacao;
   const aoVivo = v && v.aoVivo && v.aoVivo.n >= 20 ? v.aoVivo : null;
   const base = aoVivo || (v && v.teste && v.teste.n ? v.teste : null);
+  const reds = aoVivo && regra.id ? redsAoVivo(regra.id) : (v && v.reds) || null;
   return {
     nome: regra ? regra.nome : '',
     taxa: base ? base.taxa : null,
     n: base ? base.n : null,
     roi: base ? base.roi : null,
     fonte: aoVivo ? 'ao vivo' : 'histórico',
+    reds: reds && reds.n ? { ultimos: reds.ultimos, cada: reds.cada, maiorSeqRed: reds.maiorSeqRed, total: reds.reds } : null,
   };
+}
+
+// "13:42" se foi hoje, "20/10 13:42" se foi outro dia
+function quando(iso) {
+  const dia = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit' });
+  const d = dia.format(new Date(iso));
+  return d === dia.format(new Date()) ? hhmm(iso) : `${d} ${hhmm(iso)}`;
 }
 
 // Os jogos de cada tiro, já conhecidos no momento do envio
@@ -150,6 +169,14 @@ function montarMensagem({ liga, mercado, tiros, plano, hist = [], final = null, 
   if (meta.taxa != null) {
     t += `📊 Assertividade (${meta.fonte}): <b>${meta.taxa}%</b> em ${meta.n} sinais\n`;
     if (meta.roi != null) t += `💰 ROI: <b>${meta.roi > 0 ? '+' : ''}${meta.roi}%</b>\n`;
+    if (meta.reds) {
+      if (meta.reds.total) {
+        t += `📉 Últimos REDs: ${meta.reds.ultimos.map(quando).join(' · ')}\n`;
+        t += `🔁 1 RED a cada <b>${meta.reds.cada}</b> sinais · máx. <b>${meta.reds.maiorSeqRed}</b> seguido${meta.reds.maiorSeqRed > 1 ? 's' : ''}\n`;
+      } else {
+        t += `📉 Nenhum RED no período analisado\n`;
+      }
+    }
   }
   if (meta.nome) t += `📋 ${esc(meta.nome)}`;
   if (final === 'green' || final === 'red') {
@@ -250,6 +277,9 @@ function configStop() {
   };
 }
 
+let aoPausar = null;                      // a revisão da IA se inscreve aqui
+function quandoPausar(fn) { aoPausar = fn; }
+
 async function checarStop(regraId) {
   const cfg = configStop();
   if (!cfg.ativo) return;
@@ -266,9 +296,10 @@ async function checarStop(regraId) {
     if (ult.length === cfg.redsSeguidos && ult.every((x) => x.status === 'red')) motivo = `${cfg.redsSeguidos} REDs seguidos`;
   }
   if (!motivo) return;
-  db.prepare(`UPDATE regras SET modo = 'desligado' WHERE id = ?`).run(regraId);
+  db.prepare(`UPDATE regras SET modo = 'desligado', pausada_por = 'stop' WHERE id = ?`).run(regraId);
   log('info', `Stop automático: regra "${regra.nome}" pausada (${motivo})`);
   await tg.enviar(`⛔ <b>STOP AUTOMÁTICO</b>\n\n📋 ${esc(regra.nome)}\n📉 ${esc(motivo)}\n\nA estratégia foi <b>pausada</b> e não envia mais sinais. Para reativar, use o painel.`);
+  if (aoPausar) setTimeout(() => aoPausar(regraId), 2000);
 }
 
 // ---------- Geração de sinais ----------
@@ -276,6 +307,7 @@ const inserirSinal = db.prepare(`INSERT OR IGNORE INTO sinais
   (regra_id, liga, inicio, time_casa, time_fora, mercado, odd, tiros_max, tiro_atual, alvo_inicio)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`);
 const marcarEnviado = db.prepare(`UPDATE sinais SET enviado = 1, telegram_msg_id = ?, texto = ?, chat_id = ? WHERE id = ?`);
+const jaEnviado = db.prepare(`SELECT id FROM sinais WHERE liga = ? AND inicio = ? AND mercado = ? AND enviado = 1 AND id != ? LIMIT 1`);
 const temPendente = db.prepare(`SELECT 1 FROM sinais WHERE regra_id = ? AND liga = ? AND status = 'pendente' LIMIT 1`);
 
 function regrasAtivas() {
@@ -324,6 +356,12 @@ async function gerarSinais() {
       const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
       const r = inserirSinal.run(regra.id, liga, alvo.inicio, alvo.time_casa, alvo.time_fora, regra.mercado, odd, tiros, alvo.inicio);
       if (!r.changes || regra.modo !== 'telegram') continue;
+      // trava: outra estratégia já mandou este mesmo jogo + mercado? então não repete no Telegram
+      const igual = jaEnviado.get(liga, alvo.inicio, regra.mercado, r.lastInsertRowid);
+      if (igual) {
+        db.prepare('UPDATE sinais SET duplicado_de = ? WHERE id = ?').run(igual.id, r.lastInsertRowid);
+        continue;
+      }
       const aprovada = regra.validacao && regra.validacao.status && regra.validacao.status.codigo === 'aprovada';
       if (exigirTeste && !aprovada) {
         if (Date.now() - (avisosBloqueio.get(regra.id) || 0) > 3600e3) {
@@ -358,13 +396,14 @@ function revalidarTodas() {
 function textoRelatorio(dia = hojeLocal()) {
   const ini = new Date(`${dia}T00:00:00-03:00`).toISOString();
   const fim = new Date(Date.parse(ini) + 86400e3).toISOString();
-  const linhas = db.prepare(`SELECT r.nome, s.status, s.lucro, s.enviado FROM sinais s JOIN regras r ON r.id = s.regra_id
-    WHERE s.inicio >= ? AND s.inicio < ? AND s.status IN ('green','red')`).all(ini, fim);
+  const linhas = db.prepare(`SELECT r.nome, s.status, s.lucro, s.enviado, s.inicio, s.alvo_inicio FROM sinais s JOIN regras r ON r.id = s.regra_id
+    WHERE s.inicio >= ? AND s.inicio < ? AND s.status IN ('green','red') ORDER BY s.inicio`).all(ini, fim);
   if (!linhas.length) return `📊 <b>Relatório ${dia.split('-').reverse().join('/')}</b>\nNenhum sinal conferido hoje.`;
   const porRegra = {};
   for (const l of linhas) {
-    const p = (porRegra[l.nome] ||= { g: 0, r: 0, lucro: 0, env: 0 });
+    const p = (porRegra[l.nome] ||= { g: 0, r: 0, lucro: 0, env: 0, horasRed: [], seq: 0, maxSeq: 0 });
     l.status === 'green' ? p.g++ : p.r++;
+    if (l.status === 'red') { p.horasRed.push(hhmm(l.alvo_inicio || l.inicio)); p.seq++; p.maxSeq = Math.max(p.maxSeq, p.seq); } else p.seq = 0;
     p.lucro += l.lucro || 0;
     if (l.enviado) p.env++;
   }
@@ -373,6 +412,7 @@ function textoRelatorio(dia = hojeLocal()) {
   for (const [nome, p] of Object.entries(porRegra)) {
     const taxa = ((p.g / (p.g + p.r)) * 100).toFixed(0);
     txt += `\n<b>${esc(nome)}</b>${p.env ? '' : ' (observação)'}\n✅ ${p.g}  ❌ ${p.r}  · ${taxa}% · ${p.lucro >= 0 ? '+' : ''}${p.lucro.toFixed(2)} unid.\n`;
+    if (p.horasRed.length) txt += `REDs: ${p.horasRed.join(', ')} · maior sequência: ${p.maxSeq}\n`;
     tg2 += p.g; tr += p.r; tl += p.lucro;
   }
   txt += `\n<b>Total:</b> ✅ ${tg2}  ❌ ${tr} · ${((tg2 / (tg2 + tr)) * 100).toFixed(0)}% · ${tl >= 0 ? '+' : ''}${tl.toFixed(2)} unid.`;
@@ -483,4 +523,4 @@ function iniciar() {
   log('info', `Robô iniciado (coleta a cada ${seg}s)`);
 }
 
-module.exports = { configStop, checarStop, iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };
+module.exports = { quandoPausar, configStop, checarStop, iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };

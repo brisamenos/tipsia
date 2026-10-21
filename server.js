@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 const { db, getConfig, setConfig, log } = require('./db');
 const { LIGAS, MERCADOS } = require('./mercados');
 const { validarEstrutura, TIPOS_CONDICAO } = require('./regras');
-const { backtest, panorama } = require('./validador');
+const { backtest, panorama, aoVivo } = require('./validador');
 const { avaliarIA } = require('./ia');
 const jogos = require('./jogos');
 const tson = require('./tsontips');
@@ -132,6 +132,7 @@ app.get('/api/status', (req, res) => {
     exigirAprovacao: getConfig('exigir_aprovacao_teste', false),
     tirosPadrao: getConfig('tiros_padrao', 1),
     antecedencia: getConfig('antecedencia_seg', 60),
+    stop: robo.configStop(),
     totalJogos: porLiga.reduce((s, l) => s + l.n, 0),
     porLiga,
     sinais,
@@ -185,6 +186,7 @@ app.put('/api/regras/:id', (req, res) => {
   if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
   db.prepare('UPDATE regras SET nome = ?, ligas = ?, mercado = ?, condicoes = ?, modo = ?, tiros = ?, origem = ? WHERE id = ?')
     .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo, r.tiros, r.origem, atual.id);
+  if (req.body.modo && req.body.modo !== 'desligado') db.prepare('UPDATE regras SET pausada_por = NULL WHERE id = ?').run(atual.id);
   // só mudou o modo (aprovar, pausar...): não precisa testar de novo
   if (Object.keys(req.body).every((k) => k === 'modo')) {
     return res.json(regraDaLinha(db.prepare('SELECT * FROM regras WHERE id = ?').get(atual.id)));
@@ -195,6 +197,7 @@ app.put('/api/regras/:id', (req, res) => {
 });
 
 app.delete('/api/regras/:id', (req, res) => {
+  try { iaSinais.lembrarExcluida(db.prepare('SELECT * FROM regras WHERE id = ?').get(req.params.id)); } catch { /* segue */ }
   db.prepare('DELETE FROM sinais WHERE regra_id = ?').run(req.params.id);
   db.prepare('DELETE FROM regras WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
@@ -236,7 +239,13 @@ app.get('/api/ia/:mercado', (req, res) => {
 // ---------- IA Sinais (OpenAI) ----------
 app.get('/api/ia-sinais', (req, res) => {
   const regras = db.prepare(`SELECT * FROM regras WHERE origem = 'ia' ORDER BY id DESC`).all().map(regraDaLinha);
-  res.json({ ...iaSinais.situacao(), regras });
+  // estratégias que as sugestões de troca querem substituir (podem ser manuais ou do Descobrir)
+  const antigas = {};
+  for (const r of regras) if (r.substitui && !antigas[r.substitui]) {
+    const a = db.prepare('SELECT * FROM regras WHERE id = ?').get(r.substitui);
+    if (a) antigas[r.substitui] = { ...regraDaLinha(a), aoVivo: aoVivo(a.id) };
+  }
+  res.json({ ...iaSinais.situacao(), regras, antigas });
 });
 app.post('/api/ia-sinais/config', (req, res) => {
   const b = req.body || {};
@@ -245,7 +254,17 @@ app.post('/api/ia-sinais/config', (req, res) => {
   if (b.modelo !== undefined) setConfig('openai_modelo', String(b.modelo).trim() || null);
   if (b.qtd !== undefined) setConfig('ia_qtd', Math.min(10, Math.max(1, Number(b.qtd) || 5)));
   if (b.auto !== undefined) setConfig('ia_auto', !!b.auto);
+  if (b.revisaoHoras !== undefined) setConfig('ia_revisao_horas', [0, 3, 6, 12].includes(Number(b.revisaoHoras)) ? Number(b.revisaoHoras) : 6);
   res.json({ ok: true });
+});
+app.post('/api/ia-sinais/revisar', async (req, res) => {
+  const r = await iaSinais.revisar('manual');
+  if (!r) return res.status(400).json({ erro: iaSinais.situacao().ultimoErro || 'Não foi possível revisar agora (sem API Key, sem jogos ou a IA já está trabalhando).' });
+  res.json(r);
+});
+app.post('/api/regras/:id/aprovar-troca', (req, res) => {
+  try { res.json(iaSinais.aprovarTroca(Number(req.params.id))); }
+  catch (e) { res.status(400).json({ erro: e.message }); }
 });
 app.post('/api/ia-sinais/sugerir', async (req, res) => {
   try { res.json(await iaSinais.sugerir((req.body || {}).pedido || '')); }
@@ -263,6 +282,10 @@ app.post('/api/config', (req, res) => {
     setConfig('tiros_padrao', t);
     if (mudou && jogos.ligas().length) descobrir.rodar(); // refaz a análise com os novos tiros
   }
+  if (b.stop_ativo !== undefined) setConfig('stop_ativo', !!b.stop_ativo);
+  if (b.stop_min_sinais !== undefined) setConfig('stop_min_sinais', Math.min(500, Math.max(5, Number(b.stop_min_sinais) || 20)));
+  if (b.stop_roi_min !== undefined) setConfig('stop_roi_min', Math.min(50, Math.max(-100, Number(b.stop_roi_min))));
+  if (b.stop_reds_seguidos !== undefined) setConfig('stop_reds_seguidos', Math.min(20, Math.max(0, Number(b.stop_reds_seguidos) || 0)));
   if (b.antecedencia_seg !== undefined) setConfig('antecedencia_seg', Math.min(180, Math.max(30, Number(b.antecedencia_seg) || 60)));
   res.json({ ok: true });
 });
@@ -301,9 +324,13 @@ app.listen(porta, () => {
   else jogos.carregar();
   // atualiza a descoberta de padrões sozinho: 3 min depois de ligar e a cada 6 horas
   setTimeout(() => { if (jogos.ligas().length) descobrir.rodar(); }, 3 * 60000);
-  setInterval(async () => {
-    if (!jogos.ligas().length) return;
-    await descobrir.rodar();
-    if (getConfig('ia_auto', false)) iaSinais.sugerir('').catch(() => {});
-  }, 6 * 3600e3);
+  setInterval(() => { if (jogos.ligas().length) descobrir.rodar(); }, 6 * 3600e3);
+  // revisão da IA: no intervalo escolhido (3, 6 ou 12 horas) e na hora em que o stop pausar uma estratégia
+  robo.quandoPausar((id) => iaSinais.revisar('stop', id).catch(() => {}));
+  setInterval(() => {
+    const horas = Number(getConfig('ia_revisao_horas', 6));
+    if (!horas) return;
+    const ultima = Date.parse(getConfig('ia_ultima_revisao') || 0) || 0;
+    if (Date.now() - ultima >= horas * 3600e3) iaSinais.revisar('agendada').catch(() => {});
+  }, 10 * 60000);
 });

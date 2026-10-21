@@ -85,8 +85,30 @@
           <div class="fixo" style="width:150px"><label>Sugestões por vez</label><input type="number" min="1" max="10" x-model.number="iaCfg.qtd"></div>
           <div class="fixo"><button class="btn" @click="salvarIA()">Salvar</button></div>
         </div>
-        <label style="margin-top:10px"><input type="checkbox" style="width:auto" :checked="iaS.auto" @change="salvarIA({ auto: !iaS.auto })">
-          Pedir novas sugestões sozinho a cada 6 horas (ficam aguardando sua aprovação)</label>
+      </div>
+
+      <div class="cartao">
+        <h3>Revisão automática da IA</h3>
+        <p class="suave pequeno" style="margin-top:0">A IA revisa as estratégias ativas: sugere uma <b>substituta da mesma liga</b> para as que o stop pausou ou que estão fracas ao vivo,
+          e sugere estratégias para as <b>ligas sem cobertura</b> (só se alguma ideia lucrou nas 3 partes do teste). Tudo fica aguardando sua aprovação e você recebe um aviso no Telegram.
+          Quando o stop pausar uma estratégia, a revisão acontece <b>na hora</b>.</p>
+        <div class="linha">
+          <div class="fixo" style="width:220px"><label>Revisar a cada</label>
+            <select :value="iaS.revisaoHoras" @change="salvarIA({ revisaoHoras: +$event.target.value })">
+              <option value="0">Desligada</option><option value="3">3 horas</option><option value="6">6 horas (recomendado)</option><option value="12">12 horas</option>
+            </select></div>
+          <div class="fixo"><button class="btn sec" @click="revisarIA()" :disabled="iaPedindo || iaS.rodando || !iaS.temChave">Revisar agora</button></div>
+        </div>
+        <div class="campo" style="margin-top:12px"><label>Cobertura (estratégias no Telegram por liga)</label>
+          <div class="chips">
+            <template x-for="(n, l) in iaS.cobertura" :key="l">
+              <span class="chip" :class="n ? 'on' : ''" :style="n ? '' : 'border-color:var(--vermelho);color:var(--vermelho-claro)'" x-text="meta.ligas[l] + ': ' + n"></span>
+            </template>
+          </div>
+        </div>
+        <template x-if="iaS.ultimaRevisao">
+          <p class="suave pequeno" x-text="'Última revisão: ' + fmtDataHora(iaS.ultimaRevisao.em) + ' · ' + iaS.ultimaRevisao.criadas + ' sugestão(ões)' + (iaS.ultimaRevisao.observacoes ? ' · ' + iaS.ultimaRevisao.observacoes : '')"></p>
+        </template>
       </div>
 
       <div class="cartao">
@@ -117,6 +139,14 @@
               <b x-text="r.nome"></b>
               <div class="suave pequeno" x-text="meta.mercados[r.mercado] + ' · ' + nomesLigas(r.ligas) + ' · ' + r.condicoes.map(c => descreverCond(c)).join(' + ')"></div>
               <div class="pequeno" style="margin-top:6px" x-show="r.justificativa" x-text="'💡 ' + r.justificativa"></div>
+              <template x-if="r.substitui && r.modo === 'pendente' && iaS.antigas[r.substitui]">
+                <div class="aviso pequeno" style="margin-top:8px">
+                  🔄 <b>Sugestão de troca.</b> Substitui: <b x-text="iaS.antigas[r.substitui].nome"></b>
+                  <span x-text="' (' + ({ telegram: 'ativa', desligado: iaS.antigas[r.substitui].pausada_por === 'stop' ? 'pausada pelo stop' : 'pausada', observacao: 'em observação' }[iaS.antigas[r.substitui].modo] || '') + ')'"></span><br>
+                  <span x-text="'Atual ao vivo: ' + (iaS.antigas[r.substitui].aoVivo?.n ? iaS.antigas[r.substitui].aoVivo.taxa + '% · ROI ' + iaS.antigas[r.substitui].aoVivo.roi + '% em ' + iaS.antigas[r.substitui].aoVivo.n + ' sinais' : 'sem sinais ainda')"></span>
+                  <span x-text="' → Nova na prova final: ' + (r.validacao?.prova?.n ? r.validacao.prova.taxa + '% · ROI ' + r.validacao.prova.roi + '%' : '-')"></span>
+                </div>
+              </template>
             </div>
             <div class="fixo" style="text-align:right">
               <template x-if="assertividade(r)">
@@ -140,8 +170,11 @@
             <div></div>
             <div class="fixo"><select style="width:auto" :value="r.tiros || 1" @change="tirosIA(r, $event.target.value)">
               <option value="1">1 tiro</option><option value="2">2 tiros</option><option value="3">3 tiros</option></select></div>
-            <template x-if="r.modo === 'pendente' || r.modo === 'desligado'">
-              <div class="fixo"><button class="btn peq" @click="modoIA(r, 'telegram')" x-text="r.modo === 'pendente' ? 'Aprovar (Telegram)' : 'Reativar'"></button></div>
+            <template x-if="r.modo === 'pendente'">
+              <div class="fixo"><button class="btn peq" @click="aprovarTroca(r)" x-text="r.substitui ? 'Aprovar troca' : 'Aprovar (Telegram)'"></button></div>
+            </template>
+            <template x-if="r.modo === 'desligado'">
+              <div class="fixo"><button class="btn peq" @click="modoIA(r, 'telegram')">Reativar</button></div>
             </template>
             <template x-if="r.modo === 'pendente'">
               <div class="fixo"><button class="btn sec peq" @click="modoIA(r, 'observacao')">Só observar</button></div>
@@ -155,7 +188,7 @@
             <template x-if="r.modo === 'telegram' || r.modo === 'observacao'">
               <div class="fixo"><button class="btn sec peq" @click="modoIA(r, 'desligado')">Pausar</button></div>
             </template>
-            <div class="fixo"><button class="btn perigo peq" @click="excluirIA(r)">Excluir</button></div>
+            <div class="fixo"><button class="btn perigo peq" @click="excluirIA(r)" x-text="r.modo === 'pendente' ? 'Recusar' : 'Excluir'"></button></div>
           </div>
         </div>
       </template>
