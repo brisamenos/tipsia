@@ -4,16 +4,34 @@ const { getConfig, setConfig, log } = require('./db');
 const token = () => process.env.TELEGRAM_BOT_TOKEN || '';
 const chatId = () => getConfig('telegram_chat_id') || process.env.TELEGRAM_CHAT_ID || '';
 
-async function chamar(metodo, corpo) {
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Tenta de novo quando a internet falha ("fetch failed") ou o Telegram pede para esperar (429)
+async function chamar(metodo, corpo, tentativas = metodo === 'getUpdates' ? 1 : 4) {
   if (!token()) throw new Error('TELEGRAM_BOT_TOKEN não configurado');
-  const r = await fetch(`https://api.telegram.org/bot${token()}/${metodo}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(corpo),
-  });
-  const j = await r.json();
-  if (!j.ok) throw new Error(`Telegram: ${j.description || r.status}`);
-  return j.result;
+  let ultimoErro;
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${token()}/${metodo}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(corpo),
+        signal: AbortSignal.timeout(metodo === 'getUpdates' ? 45000 : 15000),
+      });
+      const j = await r.json();
+      if (j.ok) return j.result;
+      if (r.status === 429 && i < tentativas - 1) {
+        await esperar(((j.parameters && j.parameters.retry_after) || 3) * 1000);
+        continue;
+      }
+      throw Object.assign(new Error(`Telegram: ${j.description || r.status}`), { definitivo: true });
+    } catch (e) {
+      if (e.definitivo) throw e;
+      ultimoErro = e;                          // erro de rede: tenta de novo
+      if (i < tentativas - 1) await esperar([2000, 5000, 10000][i] || 10000);
+    }
+  }
+  throw new Error(`Telegram: ${ultimoErro && ultimoErro.message}`);
 }
 
 let avisouFalta = 0;
@@ -54,6 +72,7 @@ async function editar(msgId, texto, para) {
 let comandos = {};
 function registrarComandos(mapa) { comandos = mapa; }
 
+let ultimoConflito = 0;
 async function escutar() {
   if (!token()) return;
   let offset = getConfig('telegram_offset', 0);
@@ -74,8 +93,15 @@ async function escutar() {
       }
       setConfig('telegram_offset', offset);
     } catch (e) {
-      log('erro', `Telegram (escuta): ${e.message}`);
-      await new Promise((r) => setTimeout(r, 15000));
+      // "Conflict": outro programa está usando o mesmo bot (ou o deploy antigo ainda não desligou)
+      const conflito = /conflict/i.test(e.message);
+      if (!conflito || Date.now() - ultimoConflito > 3600e3) {
+        log('erro', conflito
+          ? 'Telegram: outro programa está usando este mesmo bot para ler mensagens. Os sinais continuam sendo enviados, mas os comandos /status e /hoje podem não responder. Se o aviso continuar, use um bot só para o Lab Sinais.'
+          : `Telegram (escuta): ${e.message}`);
+        if (conflito) ultimoConflito = Date.now();
+      }
+      await new Promise((r) => setTimeout(r, conflito ? 60000 : 15000));
     }
   }
 }
