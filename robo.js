@@ -90,33 +90,73 @@ function processar(dados) {
 }
 
 // ---------- Resultados dos sinais ----------
-// ---------- Mensagem do sinal ----------
-function textoSinal(s, regra, extra = '') {
+// ---------- Mensagem do sinal (montada inteira a cada atualização) ----------
+const LINHA = '━━━━━━━━━━━━━━━━';
+const fmtOdd = (o) => (o ? `@${Number(o).toFixed(2)}` : '');
+
+// Dados fixos do sinal guardados no envio: assertividade e nome da estratégia
+function metaDaRegra(regra) {
   const v = regra && regra.validacao;
   const aoVivo = v && v.aoVivo && v.aoVivo.n >= 20 ? v.aoVivo : null;
-  const teste = v && v.teste && v.teste.n ? v.teste : null;
-  const tiros = s.tiros_max || 1;
-  let t = `🔔 <b>SINAL · Kiron ${esc(LIGAS[s.liga])}</b>\n` +
-    `⚽ ${esc(s.time_casa)} x ${esc(s.time_fora)}\n` +
-    `🕐 Entrada: <b>${hhmm(s.inicio)}</b>` + (tiros > 1 ? ` (até ${tiros} tiros)` : '') + '\n' +
-    `🎯 <b>${esc(MERCADOS[s.mercado].nome)}</b>` + (s.odd ? ` · odd <b>${Number(s.odd).toFixed(2)}</b>` : '') + '\n';
-  if (aoVivo) t += `📊 Assertividade ao vivo: <b>${aoVivo.taxa}%</b> (${aoVivo.n} sinais)\n`;
-  else if (teste) t += `📊 Assertividade no histórico: <b>${teste.taxa}%</b> (${teste.n} sinais` + (tiros > 1 ? `, com ${tiros} tiros` : '') + ')\n';
-  t += `📋 ${esc(regra ? regra.nome : '')}`;
-  return t + extra;
+  const base = aoVivo || (v && v.teste && v.teste.n ? v.teste : null);
+  return {
+    nome: regra ? regra.nome : '',
+    taxa: base ? base.taxa : null,
+    n: base ? base.n : null,
+    roi: base ? base.roi : null,
+    fonte: aoVivo ? 'ao vivo' : 'histórico',
+  };
 }
 
-function linhasHistorico(hist, final) {
-  let t = '\n━━━━━━━━━━━━━━━';
-  for (const h of hist) {
-    const placar = `${esc(h.casa)} ${h.gc}x${h.gf} ${esc(h.fora)}`;
-    t += h.ok
-      ? `\n✅ <b>GREEN${h.tiro > 1 ? ` no ${h.tiro}º tiro` : ''}</b> · ${hhmm(h.inicio)} · ${placar}` + (h.odd ? ` · odd ${Number(h.odd).toFixed(2)}` : '')
-      : `\n❌ ${h.tiro}º tiro · ${hhmm(h.inicio)} · ${placar}` + (h.odd ? ` · odd ${Number(h.odd).toFixed(2)}` : '');
+// Os jogos de cada tiro, já conhecidos no momento do envio
+function planoDeTiros(liga, alvo, tiros, mercado) {
+  const lista = [alvo, ...(proximas.get(liga) || []).filter((p) => p.t > alvo.t)].slice(0, tiros);
+  const iv = jogos.intervaloTipico(jogos.daLiga(liga));
+  while (lista.length < tiros) {
+    const ult = lista[lista.length - 1];
+    lista.push({ inicio: new Date(ult.t + iv).toISOString(), t: ult.t + iv, time_casa: null, time_fora: null, odds: {} });
   }
-  if (final === 'red') t += '\n🔴 <b>RED</b>';
-  else if (final === 'proximo') t += `\n⏭️ Indo para o ${hist.length + 1}º tiro`;
-  return t;
+  return lista.map((j) => ({ inicio: j.inicio, casa: j.time_casa, fora: j.time_fora, odd: oddDo(j, mercado) }));
+}
+
+// final: null (aguardando) | 'proximo' | 'green' | 'red'
+function montarMensagem({ liga, mercado, tiros, plano, hist = [], final = null, meta = {} }) {
+  const titulo = final === 'green' ? '✅ <b>GREEN' + (hist.length > 1 ? ` NO ${hist.length}º TIRO` : '') + '</b>'
+    : final === 'red' ? '🔴 <b>RED</b>'
+    : '🚨 <b>SINAL CONFIRMADO</b>';
+
+  let t = `${titulo}\n\n`;
+  t += `🏆 <b>Kiron · ${esc(LIGAS[liga])}</b>\n`;
+  t += `🎯 <b>${esc(MERCADOS[mercado].nome)}</b>\n`;
+  t += `${LINHA}\n`;
+  t += tiros > 1 ? `⚽ <b>ENTRADAS (até ${tiros} tiros)</b>\n` : '⚽ <b>ENTRADA</b>\n';
+
+  for (let i = 0; i < tiros; i++) {
+    const h = hist[i];
+    const p = plano[i] || {};
+    const rotulo = tiros > 1 ? `${i + 1}º tiro · ` : '';
+    if (h) {
+      t += `${h.ok ? '✅' : '❌'} ${rotulo}<b>${hhmm(h.inicio)}</b> · ${esc(h.casa)} <b>${h.gc}x${h.gf}</b> ${esc(h.fora)} ${fmtOdd(h.odd)}\n`;
+    } else if (final === 'green' || final === 'red') {
+      t += `➖ ${rotulo}${hhmm(p.inicio)} · não foi necessário\n`;
+    } else {
+      const atual = i === hist.length;
+      const jogo = p.casa ? `${esc(p.casa)} x ${esc(p.fora)}` : 'jogo seguinte';
+      t += `${atual ? '⏳' : '▫️'} ${rotulo}<b>${hhmm(p.inicio)}</b> · ${jogo} ${fmtOdd(p.odd)}\n`;
+    }
+  }
+
+  t += `${LINHA}\n`;
+  if (meta.taxa != null) {
+    t += `📊 Assertividade (${meta.fonte}): <b>${meta.taxa}%</b> em ${meta.n} sinais\n`;
+    if (meta.roi != null) t += `💰 ROI: <b>${meta.roi > 0 ? '+' : ''}${meta.roi}%</b>\n`;
+  }
+  if (meta.nome) t += `📋 ${esc(meta.nome)}`;
+  if (final === 'green' || final === 'red') {
+    const lucro = hist.reduce((s2, h) => s2 + (h.ok ? (h.odd ? h.odd - 1 : 0) : -1), 0);
+    if (hist.every((h) => h.odd)) t += `\n💵 Resultado: <b>${lucro >= 0 ? '+' : ''}${lucro.toFixed(2)} unid.</b> (1 unid. por tiro)`;
+  }
+  return t.trim();
 }
 
 // ---------- Resultados dos sinais (com tiros) ----------
@@ -169,8 +209,12 @@ async function conferirResultados(novos) {
           historico: JSON.stringify(hist),
         });
         if (s.enviado && s.telegram_msg_id) {
-          const base = s.texto || textoSinal(s, null);
-          await tg.editar(s.telegram_msg_id, base + linhasHistorico(hist, final), s.chat_id);
+          let meta = {}, plano = null;
+          try { const x = JSON.parse(s.texto); meta = x.meta || {}; plano = x.plano; } catch { /* sinal antigo */ }
+          if (!plano) plano = [{ inicio: s.inicio, casa: s.time_casa, fora: s.time_fora, odd: s.odd }];
+          if (prox && plano.length < tiro + 1) plano.push({ inicio: prox.inicio, casa: prox.time_casa, fora: prox.time_fora, odd: oddDo(prox, s.mercado) });
+          const txt = montarMensagem({ liga, mercado: s.mercado, tiros: s.tiros_max || 1, plano, hist, final: final === 'proximo' ? null : final, meta });
+          await tg.editar(s.telegram_msg_id, txt, s.chat_id);
         }
       }
     }
@@ -241,10 +285,12 @@ async function gerarSinais() {
         }
         continue;
       }
-      const s = { liga, inicio: alvo.inicio, time_casa: alvo.time_casa, time_fora: alvo.time_fora, mercado: regra.mercado, odd, tiros_max: tiros };
-      const txt = textoSinal(s, regra);
+      const plano = planoDeTiros(liga, alvo, tiros, regra.mercado);
+      const meta = metaDaRegra(regra);
+      const txt = montarMensagem({ liga, mercado: regra.mercado, tiros, plano, meta });
       const msgId = await tg.enviar(txt);
-      if (msgId) marcarEnviado.run(msgId, txt, String(tg.chatId()), r.lastInsertRowid);
+      // "texto" guarda os dados do envio para remontar a mensagem a cada tiro
+      if (msgId) marcarEnviado.run(msgId, JSON.stringify({ plano, meta }), String(tg.chatId()), r.lastInsertRowid);
     }
   }
 }
