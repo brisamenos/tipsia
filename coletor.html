@@ -47,9 +47,24 @@
         const d = await pedir(plano.caminho);
         if (d.status === 401 || d.status === 403) throw new Error(`TsonTips recusou (${d.status}). Faça login no TsonTips e toque no favorito de novo.`);
         if (d.status !== 200) throw new Error(`TsonTips respondeu ${d.status || 'erro'}: ${String(d.texto).slice(0, 120)}`);
-        const r = await fetch('/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: d.texto });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.erro || 'Falha ao enviar ao painel');
+        // tira os mercados extras ("abas") dos jogos agendados: o envio fica muito menor e não cai no meio
+        let corpo = d.texto;
+        try {
+          const dados = JSON.parse(d.texto);
+          for (const bloco of Object.values(dados.leagues || {})) for (const p of bloco.proximas || []) delete p.abas;
+          corpo = JSON.stringify(dados);
+        } catch (e) { /* manda como veio */ }
+        let r, j = {};
+        for (let tentativa = 0; tentativa < 3; tentativa++) {
+          try {
+            r = await fetch('/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: corpo });
+            j = await r.json().catch(() => ({}));
+            if (r.ok || r.status === 401) break;
+          } catch (e) { r = null; }
+          await new Promise((ok) => setTimeout(ok, 3000));
+        }
+        if (r && r.status === 401) throw new Error('Faça login no painel e abra o favorito de novo.');
+        if (!r || !r.ok) throw new Error(j.erro || 'Falha ao enviar ao painel (vai tentar de novo em 30 s)');
         msg('Coletando. Última: ' + new Date().toLocaleTimeString('pt-BR'), 'ok');
         lg.textContent = `Jogos novos na última coleta: ${j.novos}`;
       } catch (e) { msg(e.message, 'erro'); }

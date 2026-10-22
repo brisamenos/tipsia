@@ -57,10 +57,29 @@ const inserir = db.prepare(`INSERT OR IGNORE INTO jogos
 const caminhoColeta = (periodo) =>
   `/api/matches/all?period=${periodo}&leagues=${LISTA_LIGAS.join(',')}` + (periodo === '1h' ? '' : '&stale=1');
 
+// Se faltou algum jogo nas últimas horas (coleta caiu e voltou), busca as últimas 24h para tapar o buraco
+let ultimoReparo = 0;
+function temBuraco() {
+  const agora = Date.now();
+  for (const liga of LISTA_LIGAS) {
+    const arr = jogos.daLiga(liga);
+    if (arr.length < 30) continue;
+    const iv = jogos.intervaloTipico(arr);
+    if (agora - arr[arr.length - 1].t > iv * 4 + 120000) return true;          // parou de chegar jogo
+    for (let i = arr.length - 1; i > 0 && agora - arr[i].t < 3 * 3600e3; i--) {
+      if (arr[i].t - arr[i - 1].t > iv * 2.5) return true;                       // buraco no meio
+    }
+  }
+  return false;
+}
+
 function periodoAtual() {
   const total = db.prepare('SELECT COUNT(*) AS n FROM jogos').get().n;
+  if (total < 200) return '120h';
   const parado = !estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 50 * 60000;
-  return total < 200 ? '120h' : parado ? '24h' : '1h';
+  if (parado) return '24h';
+  if (Date.now() - ultimoReparo > 10 * 60000 && temBuraco()) { ultimoReparo = Date.now(); return '24h'; }
+  return '1h';
 }
 
 // Recebe a resposta do TsonTips (vinda do navegador ou do servidor) e grava os jogos novos
@@ -428,12 +447,14 @@ function revalidarTodas() {
 function textoRelatorio(dia = hojeLocal()) {
   const ini = new Date(`${dia}T00:00:00-03:00`).toISOString();
   const fim = new Date(Date.parse(ini) + 86400e3).toISOString();
-  const linhas = db.prepare(`SELECT r.nome, s.status, s.lucro, s.enviado, s.inicio, s.alvo_inicio FROM sinais s JOIN regras r ON r.id = s.regra_id
-    WHERE s.inicio >= ? AND s.inicio < ? AND s.status IN ('green','red') ORDER BY s.inicio`).all(ini, fim);
+  // agrupa por estratégia (id) e ignora os sinais repetidos que não foram enviados
+  const linhas = db.prepare(`SELECT r.id AS rid, r.nome, s.status, s.lucro, s.enviado, s.inicio, s.alvo_inicio FROM sinais s JOIN regras r ON r.id = s.regra_id
+    WHERE s.inicio >= ? AND s.inicio < ? AND s.status IN ('green','red') AND s.duplicado_de IS NULL ORDER BY s.inicio`).all(ini, fim);
+  const repetidos = db.prepare(`SELECT COUNT(*) AS n FROM sinais WHERE inicio >= ? AND inicio < ? AND duplicado_de IS NOT NULL`).get(ini, fim).n;
   if (!linhas.length) return `📊 <b>Relatório ${dia.split('-').reverse().join('/')}</b>\nNenhum sinal conferido hoje.`;
   const porRegra = {};
   for (const l of linhas) {
-    const p = (porRegra[l.nome] ||= { g: 0, r: 0, lucro: 0, env: 0, horasRed: [], seq: 0, maxSeq: 0 });
+    const p = (porRegra[l.rid] ||= { nome: l.nome, g: 0, r: 0, lucro: 0, env: 0, horasRed: [], seq: 0, maxSeq: 0 });
     l.status === 'green' ? p.g++ : p.r++;
     if (l.status === 'red') { p.horasRed.push(hhmm(l.alvo_inicio || l.inicio)); p.seq++; p.maxSeq = Math.max(p.maxSeq, p.seq); } else p.seq = 0;
     p.lucro += l.lucro || 0;
@@ -441,13 +462,20 @@ function textoRelatorio(dia = hojeLocal()) {
   }
   let txt = `📊 <b>Relatório ${dia.split('-').reverse().join('/')}</b>\n`;
   let tg2 = 0, tr = 0, tl = 0;
-  for (const [nome, p] of Object.entries(porRegra)) {
+  for (const p of Object.values(porRegra)) {
+    const nome = p.nome;
     const taxa = ((p.g / (p.g + p.r)) * 100).toFixed(0);
     txt += `\n<b>${esc(nome)}</b>${p.env ? '' : ' (observação)'}\n✅ ${p.g}  ❌ ${p.r}  · ${taxa}% · ${p.lucro >= 0 ? '+' : ''}${p.lucro.toFixed(2)} unid.\n`;
     if (p.horasRed.length) txt += `REDs: ${p.horasRed.join(', ')} · maior sequência: ${p.maxSeq}\n`;
     tg2 += p.g; tr += p.r; tl += p.lucro;
   }
   txt += `\n<b>Total:</b> ✅ ${tg2}  ❌ ${tr} · ${((tg2 / (tg2 + tr)) * 100).toFixed(0)}% · ${tl >= 0 ? '+' : ''}${tl.toFixed(2)} unid.`;
+  const env = Object.values(porRegra).filter((p) => p.env);
+  if (env.length && env.length < Object.keys(porRegra).length) {
+    const g = env.reduce((a, p) => a + p.g, 0), r = env.reduce((a, p) => a + p.r, 0), l = env.reduce((a, p) => a + p.lucro, 0);
+    txt += `\n<b>Só o que foi enviado no Telegram:</b> ✅ ${g}  ❌ ${r} · ${g + r ? ((g / (g + r)) * 100).toFixed(0) : 0}% · ${l >= 0 ? '+' : ''}${l.toFixed(2)} unid.`;
+  }
+  if (repetidos) txt += `\n<i>${repetidos} sinal(is) repetido(s) no mesmo jogo não foram enviados nem contados.</i>`;
   return txt;
 }
 
