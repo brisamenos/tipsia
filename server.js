@@ -252,6 +252,18 @@ app.get('/api/ia/:mercado', (req, res) => {
   catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// ---------- Simulador de banca ----------
+const sim = require('./simulador');
+app.get('/api/simulador', (req, res) => res.json(sim.resumo()));
+app.post('/api/simulador/config', (req, res) => {
+  const b = req.body || {};
+  const campos = ['ativo', 'bancaInicial', 'modo', 'valor', 'percentual', 'stopLossDia', 'stopGainDia'];
+  const novo = {};
+  for (const k of campos) if (b[k] !== undefined) novo[k] = b[k];
+  res.json(sim.salvar(novo));
+});
+app.post('/api/simulador/reiniciar', (req, res) => res.json(sim.reiniciar()));
+
 // ---------- Modelo de valor ----------
 app.get('/api/modelo', (req, res) => res.json(modelo.situacao()));
 app.post('/api/modelo/treinar', async (req, res) => {

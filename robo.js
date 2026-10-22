@@ -7,6 +7,7 @@ const jogos = require('./jogos');
 const tson = require('./tsontips');
 const tg = require('./telegram');
 const modelo = require('./modelo');
+const sim = require('./simulador');
 
 const TZ = process.env.TZ_EXIBICAO || 'America/Fortaleza';
 const LISTA_LIGAS = Object.keys(LIGAS);
@@ -230,6 +231,15 @@ function montarMensagem({ liga, mercado, tiros, plano, hist = [], final = null, 
     const lucro = hist.reduce((s2, h) => s2 + (h.ok ? (h.odd ? h.odd - 1 : 0) : -1), 0);
     if (hist.every((h) => h.odd)) t += `\n💵 Resultado: <b>${lucro >= 0 ? '+' : ''}${lucro.toFixed(2)} unid.</b> (1 unid. por tiro)`;
   }
+  if (meta.sim) {
+    t += `\n${LINHA}\n💼 <b>SIMULAÇÃO</b> · ${sim.reais(meta.sim.valor)} por tiro`;
+    if (meta.simFinal) {
+      const l = meta.simFinal.lucro;
+      t += `\n${l >= 0 ? '🟢' : '🔴'} Resultado: <b>${l >= 0 ? '+' : '−'}${sim.reais(Math.abs(l))}</b>\n🏦 Banca agora: <b>${sim.reais(meta.simFinal.banca)}</b>`;
+    } else {
+      t += `\n🏦 Banca: <b>${sim.reais(meta.sim.banca)}</b>` + (tiros > 1 ? ` · risco máx.: ${sim.reais(meta.sim.valor * tiros)}` : '');
+    }
+  }
   return t.trim();
 }
 
@@ -285,15 +295,22 @@ async function conferirResultados(novos) {
           odd_atual: prox ? oddDo(prox, s.mercado) : odd,
           historico: JSON.stringify(hist),
         });
+        let simFinal = null;
+        if (s.sim_valor && (final === 'green' || final === 'red') && lucro != null) {
+          const simLucro = Math.round(lucro * s.sim_valor * 100) / 100;
+          db.prepare('UPDATE sinais SET sim_lucro = ? WHERE id = ?').run(simLucro, s.id);
+          simFinal = { lucro: simLucro, banca: sim.banca() };
+        }
         if (s.enviado && s.telegram_msg_id) {
           let meta = {}, plano = null;
           try { const x = JSON.parse(s.texto); meta = x.meta || {}; plano = x.plano; } catch { /* sinal antigo */ }
+          if (simFinal) meta.simFinal = simFinal;
           if (!plano) plano = [{ inicio: s.inicio, casa: s.time_casa, fora: s.time_fora, odd: s.odd }];
           if (prox && plano.length < tiro + 1) plano.push({ inicio: prox.inicio, casa: prox.time_casa, fora: prox.time_fora, odd: oddDo(prox, s.mercado) });
           const txt = montarMensagem({ liga, mercado: s.mercado, tiros: s.tiros_max || 1, plano, hist, final: final === 'proximo' ? null : final, meta });
           await tg.editar(s.telegram_msg_id, txt, s.chat_id);
         }
-        if (final === 'green' || final === 'red') await checarStop(s.regra_id);
+        if (final === 'green' || final === 'red') { await checarStop(s.regra_id); if (s.sim_valor) await sim.avisar(tg); }
       }
     }
   }
@@ -428,10 +445,15 @@ async function gerarSinais() {
         const seguintes = (proximas.get(liga) || []).filter((p) => p.t > alvo.t).slice(0, tiros - 1);
         meta.analise = modelo.analiseJogo(regra.mercado, hist, alvo, seguintes);
       } catch (e) { log('erro', `Análise do jogo: ${e.message}`); }
+      const ent = sim.entrada(tiros);
+      if (ent.valor) meta.sim = { valor: ent.valor, banca: ent.banca };
       const txt = montarMensagem({ liga, mercado: regra.mercado, tiros, plano, meta });
       const msgId = await tg.enviar(txt);
       // "texto" guarda os dados do envio para remontar a mensagem a cada tiro
-      if (msgId) marcarEnviado.run(msgId, JSON.stringify({ plano, meta }), String(tg.chatId()), r.lastInsertRowid);
+      if (msgId) {
+        marcarEnviado.run(msgId, JSON.stringify({ plano, meta }), String(tg.chatId()), r.lastInsertRowid);
+        if (ent.valor) db.prepare('UPDATE sinais SET sim_valor = ? WHERE id = ?').run(ent.valor, r.lastInsertRowid);
+      }
     }
   }
 }
@@ -456,7 +478,7 @@ function textoRelatorio(dia = hojeLocal()) {
   const linhas = db.prepare(`SELECT r.id AS rid, r.nome, s.status, s.lucro, s.enviado, s.inicio, s.alvo_inicio FROM sinais s JOIN regras r ON r.id = s.regra_id
     WHERE s.inicio >= ? AND s.inicio < ? AND s.status IN ('green','red') AND s.duplicado_de IS NULL ORDER BY s.inicio`).all(ini, fim);
   const repetidos = db.prepare(`SELECT COUNT(*) AS n FROM sinais WHERE inicio >= ? AND inicio < ? AND duplicado_de IS NOT NULL`).get(ini, fim).n;
-  if (!linhas.length) return `📊 <b>Relatório ${dia.split('-').reverse().join('/')}</b>\nNenhum sinal conferido hoje.`;
+  if (!linhas.length) return `📊 <b>Relatório ${dia.split('-').reverse().join('/')}</b>\nNenhum sinal conferido hoje.` + sim.textoRelatorio(dia);
   const porRegra = {};
   for (const l of linhas) {
     const p = (porRegra[l.rid] ||= { nome: l.nome, g: 0, r: 0, lucro: 0, env: 0, horasRed: [], seq: 0, maxSeq: 0 });
@@ -481,6 +503,7 @@ function textoRelatorio(dia = hojeLocal()) {
     txt += `\n<b>Só o que foi enviado no Telegram:</b> ✅ ${g}  ❌ ${r} · ${g + r ? ((g / (g + r)) * 100).toFixed(0) : 0}% · ${l >= 0 ? '+' : ''}${l.toFixed(2)} unid.`;
   }
   if (repetidos) txt += `\n<i>${repetidos} sinal(is) repetido(s) no mesmo jogo não foram enviados nem contados.</i>`;
+  txt += sim.textoRelatorio(dia);
   return txt;
 }
 

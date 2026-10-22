@@ -13,7 +13,7 @@
 <header class="topo">
   <div class="logo">LAB <span>SINAIS</span></div>
   <nav class="abas">
-    <template x-for="[k, n] in [['inicio','Início'],['iasinais','IA Sinais'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['modelo','Modelo de valor'],['config','Configurações']]" :key="k">
+    <template x-for="[k, n] in [['inicio','Início'],['simulador','Simulador'],['iasinais','IA Sinais'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['modelo','Modelo de valor'],['config','Configurações']]" :key="k">
       <button class="aba" :class="aba === k && 'ativa'" @click="ir(k)" x-text="n"></button>
     </template>
   </nav>
@@ -65,6 +65,76 @@
         <p class="suave" style="margin:0">Cada regra é testada em duas metades do histórico. <b>Treino</b> é onde a ideia parece boa.
           <b>Teste</b> são jogos que a regra não viu. Só confie em regras que lucram no teste com amostra grande.
           No futebol virtual, os jogos são sorteados por algoritmo e a odd já tem margem da casa, então a maioria das regras será reprovada. Isso é esperado.</p>
+      </div>
+    </div>
+  </template>
+</section>
+
+<!-- ================= SIMULADOR ================= -->
+<section x-show="aba === 'simulador'">
+  <h2>Simulador de banca</h2>
+  <template x-if="simR">
+    <div>
+      <div class="cartao">
+        <p class="suave" style="margin-top:0">Simula uma aposta <b>de mentira</b> em cada sinal enviado no Telegram, com o valor que você escolher. Nenhum dinheiro de verdade.
+          O saldo aparece aqui, em cada mensagem do Telegram e no relatório do dia.</p>
+        <label><input type="checkbox" style="width:auto" x-model="simCfg.ativo"> <b>Simulador ligado</b></label>
+        <div class="linha" style="margin-top:10px">
+          <div class="fixo" style="width:160px"><label>Banca inicial (R$)</label><input type="number" min="1" step="1" x-model.number="simCfg.bancaInicial"></div>
+          <div class="fixo" style="width:220px"><label>Valor de cada tiro</label>
+            <select x-model="simCfg.modo"><option value="percentual">% da banca (recalcula 1x por dia)</option><option value="fixo">Valor fixo em R$</option></select></div>
+          <template x-if="simCfg.modo === 'percentual'">
+            <div class="fixo" style="width:140px"><label>% da banca por tiro</label><input type="number" min="0.1" max="20" step="0.1" x-model.number="simCfg.percentual"></div>
+          </template>
+          <template x-if="simCfg.modo === 'fixo'">
+            <div class="fixo" style="width:140px"><label>R$ por tiro</label><input type="number" min="0.01" step="0.01" x-model.number="simCfg.valor"></div>
+          </template>
+          <div class="fixo" style="width:160px"><label>Stop loss do dia (%)</label><input type="number" min="0" max="100" x-model.number="simCfg.stopLossDia"></div>
+          <div class="fixo" style="width:160px"><label>Stop gain do dia (%)</label><input type="number" min="0" max="500" x-model.number="simCfg.stopGainDia"></div>
+        </div>
+        <p class="suave pequeno">Stop do dia: se o resultado do dia chegar a esse % da banca (para baixo ou para cima), a simulação para até o dia seguinte. 0 = não usar.
+          Recomendado: 1% por tiro e stop loss de 10%.</p>
+        <div class="linha" style="justify-content:flex-start">
+          <div class="fixo"><button class="btn" @click="salvarSim()">Salvar</button></div>
+          <div class="fixo"><button class="btn perigo" @click="reiniciarSim()">Reiniciar simulação</button></div>
+        </div>
+      </div>
+
+      <div class="grade" style="margin-top:14px">
+        <div class="cartao"><div class="rotulo">Banca agora</div>
+          <div class="numero" :class="simR.lucroTotal >= 0 ? 'pos' : 'neg'" x-text="reais(simR.banca)"></div>
+          <div class="suave pequeno" x-text="'Começou com ' + reais(simR.config.bancaInicial) + (simR.config.inicio ? ' em ' + fmtDataHora(simR.config.inicio) : '')"></div></div>
+        <div class="cartao"><div class="rotulo">Resultado total</div>
+          <div class="numero" :class="clsNum(simR.lucroTotal)" x-text="sinalReais(simR.lucroTotal)"></div>
+          <div class="suave pequeno" x-text="(simR.lucroTotalPct >= 0 ? '+' : '') + simR.lucroTotalPct + '% da banca · ROI ' + (simR.roi ?? '-') + '%'"></div></div>
+        <div class="cartao"><div class="rotulo">Hoje</div>
+          <div class="numero" :class="clsNum(simR.lucroHoje)" x-text="sinalReais(simR.lucroHoje)"></div>
+          <div class="suave pequeno" x-text="simR.stop ? '⛔ ' + simR.stop + ': simulação pausada até amanhã' : (simR.proximaEntrada ? 'Próxima entrada: ' + reais(simR.proximaEntrada) + ' por tiro' : (simR.config.ativo ? '' : 'Simulador desligado'))"></div></div>
+        <div class="cartao"><div class="rotulo">Maior queda</div>
+          <div class="numero neg" x-text="'−' + reais(simR.maiorQueda)"></div>
+          <div class="suave pequeno" x-text="simR.maiorQuedaPct + '% do pico · ✅ ' + simR.greens + '  ❌ ' + simR.reds + (simR.emAndamento ? ' · ' + simR.emAndamento + ' em andamento' : '')"></div></div>
+      </div>
+
+      <div class="cartao" x-show="simR.serie.length > 1">
+        <h3>Evolução da banca</h3>
+        <div x-html="graficoBanca()"></div>
+      </div>
+
+      <div class="cartao rolagem">
+        <h3>Apostas simuladas</h3>
+        <table>
+          <tr><th>Horário</th><th>Liga</th><th>Mercado</th><th>Estratégia</th><th>Por tiro</th><th>Resultado</th><th>R$</th></tr>
+          <template x-for="s in simR.ultimas" :key="s.id">
+            <tr>
+              <td x-text="fmtDataHora(s.inicio)"></td><td x-text="meta.ligas[s.liga]"></td><td x-text="meta.mercados[s.mercado]"></td>
+              <td class="pequeno quebra" x-text="s.regra"></td><td x-text="reais(s.sim_valor)"></td>
+              <td><span :class="s.status === 'green' ? 'green' : s.status === 'red' ? 'red' : 'suave'"
+                x-text="{green: 'GREEN' + ((s.tiros_max || 1) > 1 ? ' (' + (s.tiro_green || 1) + 'º tiro)' : ''), red: 'RED', pendente: 'Em andamento', anulado: 'Anulado'}[s.status]"></span></td>
+              <td :class="clsNum(s.sim_lucro)" x-text="s.sim_lucro == null ? '-' : sinalReais(s.sim_lucro)"></td>
+            </tr>
+          </template>
+        </table>
+        <p class="suave pequeno" x-show="!simR.ultimas.length">Nenhuma aposta simulada ainda. Ligue o simulador e espere o próximo sinal no Telegram.</p>
       </div>
     </div>
   </template>

@@ -84,7 +84,9 @@ addCol('sinais', 'historico', 'TEXT');                 // JSON com o resultado d
 addCol('sinais', 'texto', 'TEXT');                     // texto original da mensagem no Telegram
 addCol('sinais', 'chat_id', 'TEXT');
 addCol('sinais', 'odd_atual', 'REAL');
-addCol('sinais', 'duplicado_de', 'INTEGER');          // sinal repetido (mesmo jogo + mercado) que não foi enviado
+addCol('sinais', 'duplicado_de', 'INTEGER');
+addCol('sinais', 'sim_valor', 'REAL');                // simulador: valor de cada tiro (R$)
+addCol('sinais', 'sim_lucro', 'REAL');                // simulador: resultado em R$          // sinal repetido (mesmo jogo + mercado) que não foi enviado
 addCol('regras', 'substitui', 'INTEGER');             // sugestão da IA para trocar esta regra
 addCol('regras', 'pausada_por', 'TEXT');
 addCol('jogos', 'odds_abertura', 'TEXT');               // primeira odd vista do jogo (para medir o movimento)              // 'stop' quando o stop automático pausou

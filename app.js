@@ -55,6 +55,7 @@ function painel() {
       if (aba === 'estatisticas') this.panorama = await api('/api/panorama');
       if (aba === 'descobrir') this.carregarDescoberta();
       if (aba === 'modelo') this.carregarModelo();
+      if (aba === 'simulador') this.carregarSim();
       if (aba === 'iasinais') { if (!this.status) await this.carregarStatus(); this.carregarIA(); }
       if (aba === 'jogos') this.carregarJogos();
       if (aba === 'config') { await this.carregarStatus(); this.cfg.chat = this.status.telegram.chatId || ''; }
@@ -318,6 +319,48 @@ window.addEventListener('message',window.__lab);
       if (v.aoVivo && v.aoVivo.n >= 20) return { rotulo: 'ao vivo', ...v.aoVivo };
       return v.teste && v.teste.n ? { rotulo: 'no histórico', ...v.teste } : null;
     },
+    // ---- Simulador de banca
+    simR: null,
+    simCfg: {},
+    reais(x) { return 'R$ ' + Number(x || 0).toFixed(2).replace('.', ','); },
+    sinalReais(x) { return (x >= 0 ? '+' : '−') + this.reais(Math.abs(x)); },
+    async carregarSim() { this.simR = await api('/api/simulador'); this.simCfg = { ...this.simR.config }; },
+    async salvarSim() {
+      const ligando = this.simCfg.ativo && !this.simR.config.ativo;
+      await api('/api/simulador/config', { method: 'POST', body: this.simCfg });
+      this.toast(ligando ? 'Simulador ligado. Os próximos sinais do Telegram entram na simulação.' : 'Simulador salvo');
+      this.carregarSim();
+    },
+    async reiniciarSim() {
+      if (!confirm('Reiniciar a simulação? A banca volta para o valor inicial e o histórico simulado começa do zero.')) return;
+      await api('/api/simulador/config', { method: 'POST', body: this.simCfg });
+      await api('/api/simulador/reiniciar', { method: 'POST' });
+      this.toast('Simulação reiniciada');
+      this.carregarSim();
+    },
+    graficoBanca() {
+      const pts = this.simR.serie;
+      const W = 900, H = 220, P = 34;
+      const vals = pts.map((p) => p.banca);
+      const ini = this.simR.config.bancaInicial;
+      let min = Math.min(...vals, ini), max = Math.max(...vals, ini);
+      if (max - min < 1) { max += 1; min -= 1; }
+      const x = (i) => P + (i / Math.max(1, pts.length - 1)) * (W - P - 8);
+      const y = (v) => 8 + (1 - (v - min) / (max - min)) * (H - 30);
+      const linha = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.banca).toFixed(1)}`).join(' ');
+      const cor = vals[vals.length - 1] >= ini ? 'var(--verde-claro)' : 'var(--vermelho-claro)';
+      const ref = y(ini).toFixed(1);
+      const rot = (v) => 'R$ ' + Math.round(v);
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Evolução da banca simulada">
+        <line x1="${P}" x2="${W - 8}" y1="${ref}" y2="${ref}" stroke="var(--borda)" stroke-dasharray="4 4"/>
+        <text x="2" y="${y(max) + 4}" fill="var(--suave)" font-size="11">${rot(max)}</text>
+        <text x="2" y="${y(min) + 4}" fill="var(--suave)" font-size="11">${rot(min)}</text>
+        <text x="${W - 8}" y="${Number(ref) - 4}" fill="var(--suave)" font-size="11" text-anchor="end">início ${rot(ini)}</text>
+        <path d="${linha}" fill="none" stroke="${cor}" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="${x(pts.length - 1)}" cy="${y(vals[vals.length - 1])}" r="4" fill="${cor}"/>
+      </svg>`;
+    },
+
     async novaChaveColetor() {
       if (!confirm('Gerar uma nova chave? A extensão vai parar até você colar a chave nova nela.')) return;
       await api('/api/config/nova-chave-coletor', { method: 'POST' });
