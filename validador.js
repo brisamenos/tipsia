@@ -123,6 +123,7 @@ function estatRed(entradas) {
     cada: reds.length ? +(n / reds.length).toFixed(1) : null,   // 1 RED a cada X sinais
     maiorSeqRed: maxR,
     maiorSeqGreen: maxG,
+    seqAtual: n ? { tipo: lista[n - 1].acerto ? 'green' : 'red', n: lista[n - 1].acerto ? seqG : seqR } : null,
     geral: taxa(lista.map((e) => e.acerto)),
     aposRed: { n: aposRed.length, taxa: taxa(aposRed) },
   };

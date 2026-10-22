@@ -144,7 +144,8 @@ function metaDaRegra(regra) {
     n: base ? base.n : null,
     roi: base ? base.roi : null,
     fonte: aoVivo ? 'ao vivo' : 'histórico',
-    reds: reds && reds.n ? { ultimos: reds.ultimos, cada: reds.cada, maiorSeqRed: reds.maiorSeqRed, total: reds.reds } : null,
+    reds: reds && reds.n ? { ultimos: reds.ultimos, cada: reds.cada, maiorSeqRed: reds.maiorSeqRed, total: reds.reds,
+      maiorSeqGreen: reds.maiorSeqGreen, seqAtual: reds.seqAtual } : null,
   };
 }
 
@@ -219,6 +220,9 @@ function montarMensagem({ liga, mercado, tiros, plano, hist = [], final = null, 
       } else {
         t += `📉 Nenhum RED no período analisado\n`;
       }
+      const sa = meta.reds.seqAtual;
+      if (sa && sa.tipo === 'green') t += `🔥 Greens seguidos agora: <b>${sa.n}</b> · recorde: <b>${meta.reds.maiorSeqGreen}</b>\n`;
+      else if (sa) t += `🧊 Vem de <b>${sa.n}</b> RED${sa.n > 1 ? 's' : ''} seguido${sa.n > 1 ? 's' : ''} · recorde de greens: <b>${meta.reds.maiorSeqGreen}</b>\n`;
     }
   }
   if (meta.nome) t += `📋 ${esc(meta.nome)}`;

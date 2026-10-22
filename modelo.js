@@ -6,8 +6,8 @@ const { LIGAS, MERCADOS, oddDo, bateu, probJusta } = require('./mercados');
 const jogos = require('./jogos');
 const { getConfig, setConfig, log } = require('./db');
 
-const BASE = ['ambas_sim', 'over_15', 'over_25', 'over_35', 'casa', 'empate', 'fora'];
-const COMPLEMENTO = { ambas_nao: 'ambas_sim', under_15: 'over_15', under_25: 'over_25', under_35: 'over_35' };
+const BASE = ['ambas_sim', 'over_15', 'over_25', 'over_35', 'casa', 'empate', 'fora', 'gols_impar'];
+const COMPLEMENTO = { ambas_nao: 'ambas_sim', under_15: 'over_15', under_25: 'over_25', under_35: 'over_35', gols_par: 'gols_impar' };
 const LISTA_LIGAS = Object.keys(LIGAS);
 const estado = { rodando: false, progresso: '', em: null };
 
@@ -166,6 +166,8 @@ function analiseJogo(mercado, arr, alvo, seguintes = []) {
   return out;
 }
 
+const mercadoCoberto = (mercado) => !!baseDe(mercado);
+
 function temModelo(mercado) { const b = baseDe(mercado); return !!(b && pesos[b.base]); }
 
 // ---------- Treino + teste dia a dia ----------
@@ -261,4 +263,4 @@ function situacao() {
     margem: Number(getConfig('modelo_margem', 5)), consenso: getConfig('consenso', false) };
 }
 
-module.exports = { analiseJogo, prever, temModelo, treinar, situacao, BASE, COMPLEMENTO };
+module.exports = { mercadoCoberto, analiseJogo, prever, temModelo, treinar, situacao, BASE, COMPLEMENTO };

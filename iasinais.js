@@ -132,7 +132,8 @@ Formato das regras:
   {"tipo":"gols_anterior","op":">="|"<=","qtd":<número>}
   {"tipo":"minuto","valores":[<minutos>]}  {"tipo":"hora","valores":[<horas>]}
   {"tipo":"odd","min":<número ou "">,"max":<número ou "">}  (odd do próprio mercado da regra)
-  {"tipo":"modelo","margem":5}  (só entra quando o MODELO DE VALOR vê vantagem de pelo menos "margem"% sobre a odd)
+  {"tipo":"modelo","margem":5}  (só entra quando o MODELO DE VALOR vê vantagem de pelo menos "margem"% sobre a odd;
+   só funciona nos mercados: ambas_sim, ambas_nao, over/under 1.5/2.5/3.5, casa, empate, fora, gols_impar, gols_par)
 - Veja "modelo_de_valor": são os mercados em que o modelo estatístico achou valor fora da amostra.
   Combinar uma condição simples com {"tipo":"modelo"} costuma filtrar melhor do que só regras de sequência.
 ${pedido ? `\nPedido do usuário: ${pedido}\n` : ''}
@@ -214,7 +215,7 @@ async function sugerir(pedido = '') {
         modo: 'observacao',
         tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
       };
-      if (validarEstrutura(regra).length || jaExisteParecida(regra)) continue;
+      if (validarEstrutura(regra).length || jaExisteParecida(regra) || modeloInvalido(regra)) continue;
       const info = ins.run(regra.nome, JSON.stringify(regra.ligas), regra.mercado, JSON.stringify(regra.condicoes),
         regra.tiros, String(sug.justificativa || '').slice(0, 400));
       const v = backtest({ ...regra, id: info.lastInsertRowid });
@@ -233,6 +234,11 @@ async function sugerir(pedido = '') {
   } finally {
     estado.rodando = false;
   }
+}
+
+// a condição "modelo" só funciona nos mercados que o modelo de valor calcula
+function modeloInvalido(regra) {
+  return regra.condicoes.some((c) => c.tipo === 'modelo') && !require('./modelo').mercadoCoberto(regra.mercado);
 }
 
 // ---------- Evitar estratégias repetidas ----------
@@ -262,6 +268,7 @@ function criarPendente(sug, { substitui = null, ligaObrigatoria = null } = {}) {
     tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
   };
   if (validarEstrutura(regra).length) return { ok: false, motivo: 'formato inválido' };
+  if (modeloInvalido(regra)) return { ok: false, motivo: 'o modelo de valor não calcula este mercado' };
   if (jaExisteParecida(regra)) return { ok: false, motivo: 'parecida com uma que já existe' };
   const v = backtest(regra);
   const lucraTudo = v.treino.roi > 0 && v.validacao.roi > 0 && v.prova.n >= 10 && v.prova.roi > 0;
