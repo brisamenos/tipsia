@@ -318,6 +318,12 @@ window.addEventListener('message',window.__lab);
       if (v.aoVivo && v.aoVivo.n >= 20) return { rotulo: 'ao vivo', ...v.aoVivo };
       return v.teste && v.teste.n ? { rotulo: 'no histórico', ...v.teste } : null;
     },
+    async novaChaveColetor() {
+      if (!confirm('Gerar uma nova chave? A extensão vai parar até você colar a chave nova nela.')) return;
+      await api('/api/config/nova-chave-coletor', { method: 'POST' });
+      await this.carregarStatus();
+      this.toast('Nova chave gerada. Cole na extensão.');
+    },
     async salvarStop() {
       const st = this.status.stop;
       await api('/api/config', { method: 'POST', body: { stop_ativo: st.ativo, stop_min_sinais: st.minSinais, stop_roi_min: st.roiMin, stop_reds_seguidos: st.redsSeguidos } });

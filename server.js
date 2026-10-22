@@ -55,8 +55,21 @@ app.use(session({
   cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 86400e3 },
 }));
 
+// Chave da extensão do Chrome: permite enviar os jogos sem estar logado no painel
+function chaveColetor() {
+  let k = getConfig('ingest_token');
+  if (!k) { k = crypto.randomBytes(16).toString('hex'); setConfig('ingest_token', k); }
+  return k;
+}
+const chaveOk = (req) => {
+  const k = String(req.get('x-lab-token') || '');
+  const certa = chaveColetor();
+  return k.length === certa.length && crypto.timingSafeEqual(Buffer.from(k), Buffer.from(certa));
+};
+
 const exigeLogin = (req, res, next) => {
   if (req.session.usuario) return next();
+  if (req.path.startsWith('/api/ingest') && chaveOk(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ erro: 'Faça login' });
   return res.redirect('/login.html?volta=' + encodeURIComponent(req.originalUrl));
 };
@@ -130,6 +143,8 @@ app.get('/api/status', (req, res) => {
     robo: robo.estado,
     sessao: tson.infoSessao(),
     telegram: { token: !!process.env.TELEGRAM_BOT_TOKEN, chatId: tg.chatId() || null },
+    chaveColetor: chaveColetor(),
+    painelUrl: `${req.protocol}://${req.get('host')}`,
     exigirAprovacao: getConfig('exigir_aprovacao_teste', false),
     tirosPadrao: getConfig('tiros_padrao', 1),
     antecedencia: getConfig('antecedencia_seg', 60),
@@ -328,6 +343,11 @@ app.post('/api/config/sessao', async (req, res) => {
     const msg = e.message === 'fetch failed' ? 'O servidor não conseguiu acessar o TsonTips. Tente de novo em alguns minutos.' : e.message;
     res.status(400).json({ erro: msg });
   }
+});
+
+app.post('/api/config/nova-chave-coletor', (req, res) => {
+  setConfig('ingest_token', crypto.randomBytes(16).toString('hex'));
+  res.json({ ok: true, chave: chaveColetor() });
 });
 
 app.post('/api/telegram/teste', async (req, res) => {

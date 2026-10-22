@@ -553,10 +553,10 @@ async function ciclo() {
   try {
     const parado = !estado.ultimaColeta || Date.now() - Date.parse(estado.ultimaColeta) > 10 * 60000;
     if (parado) {
-      estado.ultimoErro = 'Coletor parado. Abra o TsonTips (logado) e toque no favorito Lab Sinais.';
+      estado.ultimoErro = 'Coletor parado. Confira o Chrome e a extensão Lab Sinais (ou o favorito, se ainda usa).';
       if (estado.ultimaColeta && !getConfig('tson_alerta_enviado')) {
         setConfig('tson_alerta_enviado', true);
-        await tg.enviar('⚠️ <b>O coletor parou.</b>\nAbra o TsonTips (logado) e toque no favorito Lab Sinais. Até lá, não há coleta nem sinais.');
+        await tg.enviar('⚠️ <b>O coletor parou.</b>\nConfira se o computador está ligado, o Chrome aberto e a extensão Lab Sinais com o ícone verde. Se o ícone estiver vermelho, abra a aba do TsonTips e faça login. Até lá, não há coleta nem sinais.');
       }
     }
     await talvezRelatorio();

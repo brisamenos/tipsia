@@ -593,12 +593,25 @@
         <p :class="status.robo.ultimaColeta ? 'ok' : 'erro'" style="margin-top:0"
           x-text="status.robo.ultimaColeta ? 'Coletando. Última coleta recebida com sucesso.' : 'Coletor parado'"></p>
         <p class="suave pequeno" style="margin-top:0">O TsonTips só aceita a sessão no seu computador, então a coleta roda no seu navegador e envia os jogos para cá.</p>
+
+        <p style="margin-bottom:6px"><b>Extensão do Chrome (recomendado)</b></p>
+        <p class="suave pequeno" style="margin-top:0">Roda sozinha em segundo plano: reabre a aba do TsonTips se fechar, recarrega se a sessão cair e não precisa de janela nem favorito.
+          Na extensão, preencha estes dois campos:</p>
+        <div class="linha campo">
+          <div><label>Endereço do painel</label><input readonly :value="status.painelUrl" @focus="$event.target.select()"></div>
+          <div><label>Chave do coletor</label><input readonly :value="status.chaveColetor" @focus="$event.target.select()"></div>
+          <div class="fixo"><button class="btn sec peq" @click="navigator.clipboard.writeText(status.chaveColetor); toast('Chave copiada')">Copiar chave</button></div>
+          <div class="fixo"><button class="btn perigo peq" @click="novaChaveColetor()">Gerar nova</button></div>
+        </div>
+
+        <details class="suave pequeno"><summary>Jeito antigo: favorito + janela do coletor</summary>
         <ol class="suave pequeno" style="margin:4px 0 10px">
           <li>Arraste este botão para a barra de favoritos: <a class="btn peq" :href="linkConectar()" @click.prevent="toast('Arraste o botão para a barra de favoritos')" style="text-decoration:none">Lab Sinais</a></li>
           <li>Entre no TsonTips e faça login.</li>
           <li>Com o TsonTips aberto, clique no favorito <b>Lab Sinais</b>. Abre uma janela pequena do coletor.</li>
           <li>Deixe <b>as duas abas abertas</b> (pode minimizar). Se recarregar a aba do TsonTips, clique no favorito de novo.</li>
         </ol>
+        </details>
       </div>
 
       <div class="cartao">
