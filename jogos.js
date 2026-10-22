@@ -10,6 +10,7 @@ function linhaParaJogo(r) {
     hora: r.hora, minuto: r.minuto, time_casa: r.time_casa, time_fora: r.time_fora,
     gc: r.gc, gf: r.gf, gc_ht: r.gc_ht, gf_ht: r.gf_ht,
     odds: r.odds ? JSON.parse(r.odds) : {},
+    abertura: r.odds_abertura ? JSON.parse(r.odds_abertura) : null,
   };
 }
 

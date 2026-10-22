@@ -10,6 +10,7 @@ const TIPOS_CONDICAO = {
   minuto: 'Minuto do jogo alvo',
   hora: 'Hora do jogo alvo',
   odd: 'Faixa de odd do jogo alvo (no mercado da regra)',
+  modelo: 'Modelo de valor: a chance calculada pelo modelo × a odd passa da margem',
 };
 
 function comparar(a, op, b) {
@@ -76,6 +77,13 @@ function avaliar(regra, hist, alvo, fim) {
         if (o == null) return false;
         if (c.min !== '' && c.min != null && o < Number(c.min)) return false;
         if (c.max !== '' && c.max != null && o > Number(c.max)) return false;
+        break;
+      }
+      case 'modelo': {
+        const o = oddDo(alvo, regra.mercado);
+        const p = require('./modelo').prever(regra.mercado, hist, alvo, L);
+        if (p == null || !o) return false;
+        if (p * o < 1 + (Number(c.margem) || 5) / 100) return false;
         break;
       }
       default:

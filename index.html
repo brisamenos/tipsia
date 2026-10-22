@@ -13,7 +13,7 @@
 <header class="topo">
   <div class="logo">LAB <span>SINAIS</span></div>
   <nav class="abas">
-    <template x-for="[k, n] in [['inicio','Início'],['iasinais','IA Sinais'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['ia','IA'],['config','Configurações']]" :key="k">
+    <template x-for="[k, n] in [['inicio','Início'],['iasinais','IA Sinais'],['descobrir','Descobrir padrões'],['regras','Regras'],['sinais','Sinais'],['estatisticas','Estatísticas'],['jogos','Jogos'],['modelo','Modelo de valor'],['config','Configurações']]" :key="k">
       <button class="aba" :class="aba === k && 'ativa'" @click="ir(k)" x-text="n"></button>
     </template>
   </nav>
@@ -76,11 +76,17 @@
   <template x-if="iaS">
     <div>
       <div class="cartao">
-        <h3>Configuração da OpenAI</h3>
+        <h3>Configuração da IA</h3>
+        <div class="linha campo">
+          <div class="fixo" style="width:240px"><label>Provedor</label>
+            <select :value="iaS.provedor" @change="salvarIA({ provedor: $event.target.value })">
+              <option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option>
+            </select></div>
+        </div>
         <p class="pequeno" :class="iaS.temChave ? 'pos' : 'neg'"
-          x-text="iaS.temChave ? 'API Key configurada (' + iaS.chaveFinal + ')' + (iaS.chaveNoServidor ? ' nas variáveis do servidor' : '') : 'Falta a API Key da OpenAI'"></p>
+          x-text="iaS.temChave ? 'API Key configurada (' + iaS.chaveFinal + ')' + (iaS.chaveNoServidor ? ' nas variáveis do servidor' : '') : 'Falta a API Key do ' + (iaS.provedor === 'anthropic' ? 'Claude' : 'OpenAI')"></p>
         <div class="linha">
-          <div><label>API Key (fica guardada só no seu servidor)</label><input type="password" x-model="iaCfg.chave" placeholder="sk-..." autocomplete="off"></div>
+          <div><label>API Key (fica guardada só no seu servidor)</label><input type="password" x-model="iaCfg.chave" :placeholder="iaS.provedor === 'anthropic' ? 'sk-ant-...' : 'sk-...'" autocomplete="off"></div>
           <div class="fixo" style="width:180px"><label>Modelo</label><input x-model="iaCfg.modelo"></div>
           <div class="fixo" style="width:150px"><label>Sugestões por vez</label><input type="number" min="1" max="10" x-model.number="iaCfg.qtd"></div>
           <div class="fixo"><button class="btn" @click="salvarIA()">Salvar</button></div>
@@ -367,6 +373,9 @@
             <template x-if="c.tipo === 'odd'">
               <div class="fixo" style="width:100px"><label>Odd máxima</label><input type="number" step="0.01" x-model="c.max"></div>
             </template>
+            <template x-if="c.tipo === 'modelo'">
+              <div class="fixo" style="width:160px"><label>Vantagem mínima (%)</label><input type="number" min="1" max="30" x-model="c.margem"></div>
+            </template>
             <div class="fixo"><button class="btn perigo peq" @click="editando.condicoes.splice(i, 1)" :disabled="editando.condicoes.length === 1">Remover</button></div>
           </div>
         </div>
@@ -524,40 +533,53 @@
   </template>
 </section>
 
-<!-- ================= IA ================= -->
-<section x-show="aba === 'ia'">
-  <h2>Laboratório de IA</h2>
-  <div class="cartao">
-    <p class="suave" style="margin-top:0">Um modelo de aprendizado de máquina (regressão logística) aprende com a 1ª metade dos jogos,
-      usando a odd, a frequência recente do mercado, sequências, minuto e liga. Depois é testado na 2ª metade, contra a própria odd da casa.</p>
-    <div class="linha">
-      <div style="max-width:260px"><label>Mercado</label>
-        <select x-model="ia.mercado">
-          <template x-for="(n, k) in meta.mercados" :key="k"><option :value="k" x-text="n" :selected="k === ia.mercado"></option></template>
-        </select></div>
-      <div class="fixo" style="width:180px"><label>Vantagem mínima p/ entrar (%)</label><input type="number" min="0" max="30" x-model="ia.margem"></div>
-      <div class="fixo"><button class="btn" @click="rodarIA()" :disabled="ia.carregando" x-text="ia.carregando ? 'Treinando...' : 'Treinar e testar'"></button></div>
-    </div>
+<!-- ================= MODELO DE VALOR ================= -->
+<section x-show="aba === 'modelo'">
+  <div class="linha" style="margin-bottom:14px">
+    <h2 style="margin:0">Modelo de valor</h2>
+    <div class="fixo"><button class="btn" @click="treinarModelo()" :disabled="mod?.rodando" x-text="mod?.rodando ? 'Treinando: ' + (mod.progresso || '...') : 'Treinar agora'"></button></div>
   </div>
-  <template x-if="ia.res">
-    <div class="cartao">
-      <template x-if="ia.res.erro"><div class="aviso" x-text="ia.res.erro"></div></template>
-      <template x-if="!ia.res.erro">
-        <div>
-          <div :class="ia.res.iaPreveMelhorQueOdds ? 'ok' : 'aviso'" style="margin-bottom:12px"
-            x-text="ia.res.iaPreveMelhorQueOdds ? 'A IA previu um pouco melhor que as odds nos jogos de teste. Confira se isso se mantém com mais dados.' : 'A IA NÃO conseguiu prever melhor que as odds da casa nos jogos de teste.'"></div>
-          <div class="grade">
-            <div><div class="rotulo">Jogos de treino / teste</div><div class="numero" style="font-size:18px" x-text="ia.res.treinoJogos + ' / ' + ia.res.testeJogos"></div></div>
-            <div><div class="rotulo">Erro da IA (log-loss)</div><div class="numero" style="font-size:18px" x-text="ia.res.logLossIA"></div></div>
-            <div><div class="rotulo">Erro das odds (log-loss)</div><div class="numero" style="font-size:18px" x-text="ia.res.logLossOdds"></div></div>
-            <div><div class="rotulo">Entradas da IA no teste</div><div class="numero" style="font-size:18px" x-text="ia.res.entradasNoTeste.n"></div>
-              <div class="pequeno"><span x-text="(ia.res.entradasNoTeste.taxa ?? '-') + '% de acerto · '"></span>
-                <span :class="clsNum(ia.res.entradasNoTeste.roi)" x-text="'ROI ' + (ia.res.entradasNoTeste.roi ?? '-') + '%'"></span></div></div>
-          </div>
-          <p class="suave pequeno">Log-loss mede o erro das previsões: quanto menor, melhor. Se o da IA não for menor que o das odds, ela não sabe mais que a casa.</p>
-        </div>
-      </template>
+  <div class="cartao">
+    <p class="suave" style="margin-top:0">Um modelo estatístico calcula, para cada jogo, a <b>chance real</b> de cada mercado e compara com a odd.
+      Ele usa a odd, o <b>movimento da odd</b> antes do jogo, a frequência recente na liga, os <b>times</b>, o jogo anterior, o horário e a liga.
+      É testado <b>dia a dia</b>: para prever cada dia, só aprende com os dias anteriores. Só indica entrada quando vê <b>vantagem</b> sobre a odd.
+      Treina sozinho a cada 2 horas.</p>
+    <div class="linha">
+      <div class="fixo" style="width:220px"><label>Vantagem mínima sobre a odd (%)</label><input type="number" min="1" max="30" x-model.number="modCfg.margem"></div>
+      <div class="fixo"><button class="btn sec" @click="salvarModelo()">Salvar e treinar</button></div>
     </div>
+    <label style="margin-top:12px"><input type="checkbox" style="width:auto" :checked="mod?.consenso" @change="alternarConsenso()">
+      <b>Consenso:</b> as estratégias só enviam o sinal se o modelo também concordar (não vir a entrada como desvantajosa)</label>
+  </div>
+
+  <template x-if="mod?.resultado">
+    <div>
+      <p class="suave pequeno" x-text="'Último treino: ' + fmtDataHora(mod.resultado.em) + ' · ' + mod.resultado.dias + ' dias de dados · vantagem mínima ' + mod.resultado.margem + '%'"></p>
+      <div class="aviso" x-show="mod.resultado.dias < 7" style="margin-bottom:14px">Ainda há poucos dias de dados. Os primeiros 2 dias servem só de treino, então o teste dia a dia ainda é curto. Com 2 a 3 semanas, os números ficam bem mais confiáveis.</div>
+      <div class="cartao rolagem">
+        <table>
+          <tr><th>Mercado</th><th>Previsão vs odd</th><th>Entradas com valor</th><th>Acerto</th><th>ROI</th><th>Dias</th><th>Melhores ligas</th><th>Status</th><th></th></tr>
+          <template x-for="m in mod.resultado.mercados" :key="m.mercado">
+            <tr>
+              <td><b x-text="m.nome"></b></td>
+              <td class="pequeno" :class="clsNum(m.melhora)" x-text="m.melhora != null ? (m.melhora > 0 ? 'melhor ' : 'pior ') + Math.abs(m.melhora) + '%' : '-'"></td>
+              <td x-text="m.valor.n"></td>
+              <td><span x-text="m.valor.taxa != null ? m.valor.taxa + '%' : '-'"></span><div class="suave pequeno" x-text="m.valor.oddMedia ? 'odd média ' + m.valor.oddMedia : ''"></div></td>
+              <td :class="clsNum(m.valor.roi)" x-text="m.valor.roi != null ? m.valor.roi + '%' : '-'"></td>
+              <td class="pequeno" x-text="m.dias.total ? m.dias.positivos + ' de ' + m.dias.total : '-'"></td>
+              <td class="pequeno quebra" x-text="Object.entries(m.porLiga || {}).filter(([l, x]) => x.n >= 20).sort((a, b) => b[1].roi - a[1].roi).slice(0, 3).map(([l, x]) => meta.ligas[l] + ' ' + (x.roi > 0 ? '+' : '') + x.roi + '%').join(' · ') || '-'"></td>
+              <td><span class="selo" :class="'s-' + m.status.codigo" x-text="m.status.texto.split(':')[0]"></span></td>
+              <td><button class="btn sec peq" @click="criarEstrategiaModelo(m.mercado)" :disabled="!m.valor.n">Criar estratégia</button></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <p class="suave pequeno">"Previsão vs odd": quanto o modelo erra menos (melhor) ou mais (pior) do que a própria odd, nos dias de teste. Se for "pior", o modelo não sabe mais que a casa naquele mercado.
+        "Criar estratégia" cria uma regra em <b>observação</b> na aba Regras, com 1 tiro. Ajuste ligas, tiros e modo por lá.</p>
+    </div>
+  </template>
+  <template x-if="mod && !mod.resultado && !mod.rodando">
+    <div class="cartao"><p class="suave" style="margin:0">O modelo ainda não foi treinado. Toque em <b>Treinar agora</b>. Ele precisa de pelo menos 3 dias de jogos.</p></div>
   </template>
 </section>
 

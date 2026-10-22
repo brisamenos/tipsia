@@ -16,6 +16,7 @@ const tg = require('./telegram');
 const robo = require('./robo');
 const descobrir = require('./descobrir');
 const iaSinais = require('./iasinais');
+const modelo = require('./modelo');
 
 // ---------- Usuário inicial ----------
 if (!db.prepare('SELECT COUNT(*) AS n FROM usuarios').get().n) {
@@ -156,7 +157,7 @@ function lerRegra(body) {
     condicoes: Array.isArray(body.condicoes) ? body.condicoes : [],
     modo: body.modo || 'observacao',
     tiros: Math.min(3, Math.max(1, Number(body.tiros) || Number(getConfig('tiros_padrao', 1)) || 1)),
-    origem: ['manual', 'descoberta', 'ia'].includes(body.origem) ? body.origem : 'manual',
+    origem: ['manual', 'descoberta', 'ia', 'modelo'].includes(body.origem) ? body.origem : 'manual',
   };
 }
 
@@ -236,6 +237,32 @@ app.get('/api/ia/:mercado', (req, res) => {
   catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// ---------- Modelo de valor ----------
+app.get('/api/modelo', (req, res) => res.json(modelo.situacao()));
+app.post('/api/modelo/treinar', async (req, res) => {
+  if (!jogos.ligas().length) return res.status(400).json({ erro: 'Ainda não há jogos no banco.' });
+  modelo.treinar().then(() => robo.revalidarTodas());
+  res.json({ ok: true });
+});
+app.post('/api/modelo/config', (req, res) => {
+  const b = req.body || {};
+  if (b.margem !== undefined) setConfig('modelo_margem', Math.min(30, Math.max(1, Number(b.margem) || 5)));
+  if (b.consenso !== undefined) setConfig('consenso', !!b.consenso);
+  res.json({ ok: true });
+});
+app.post('/api/modelo/estrategia', (req, res) => {
+  const { mercado, liga } = req.body || {};
+  if (!MERCADOS[mercado]) return res.status(400).json({ erro: 'Mercado inválido' });
+  const lg = liga && LIGAS[liga] ? liga : '*';
+  const margem = Number(getConfig('modelo_margem', 5));
+  const r = { nome: `Modelo · ${MERCADOS[mercado].nome} · ${lg === '*' ? 'Todas' : LIGAS[lg]} · valor ≥ ${margem}%`, ligas: [lg], mercado,
+    condicoes: [{ tipo: 'modelo', margem }], modo: 'observacao', tiros: 1, origem: 'modelo' };
+  const info = db.prepare('INSERT INTO regras (nome, ligas, mercado, condicoes, modo, tiros, origem) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(r.nome, JSON.stringify(r.ligas), r.mercado, JSON.stringify(r.condicoes), r.modo, r.tiros, r.origem);
+  db.prepare('UPDATE regras SET validacao = ? WHERE id = ?').run(JSON.stringify(backtest({ ...r, id: info.lastInsertRowid })), info.lastInsertRowid);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
 // ---------- IA Sinais (OpenAI) ----------
 app.get('/api/ia-sinais', (req, res) => {
   const regras = db.prepare(`SELECT * FROM regras WHERE origem = 'ia' ORDER BY id DESC`).all().map(regraDaLinha);
@@ -249,9 +276,11 @@ app.get('/api/ia-sinais', (req, res) => {
 });
 app.post('/api/ia-sinais/config', (req, res) => {
   const b = req.body || {};
-  if (b.chave !== undefined && String(b.chave).trim()) setConfig('openai_key', String(b.chave).trim());
-  if (b.apagarChave) setConfig('openai_key', null);
-  if (b.modelo !== undefined) setConfig('openai_modelo', String(b.modelo).trim() || null);
+  if (b.provedor !== undefined) setConfig('ia_provedor', b.provedor === 'anthropic' ? 'anthropic' : 'openai');
+  const prov = (getConfig('ia_provedor') || 'openai') === 'anthropic' ? 'anthropic' : 'openai';
+  if (b.chave !== undefined && String(b.chave).trim()) setConfig(prov + '_key', String(b.chave).trim());
+  if (b.apagarChave) setConfig(prov + '_key', null);
+  if (b.modelo !== undefined && b.provedor === undefined) setConfig(prov + '_modelo', String(b.modelo).trim() || null);
   if (b.qtd !== undefined) setConfig('ia_qtd', Math.min(10, Math.max(1, Number(b.qtd) || 5)));
   if (b.auto !== undefined) setConfig('ia_auto', !!b.auto);
   if (b.revisaoHoras !== undefined) setConfig('ia_revisao_horas', [0, 3, 6, 12].includes(Number(b.revisaoHoras)) ? Number(b.revisaoHoras) : 6);
@@ -327,6 +356,10 @@ app.listen(porta, () => {
   setInterval(() => { if (jogos.ligas().length) descobrir.rodar(); }, 6 * 3600e3);
   // revisão da IA: no intervalo escolhido (3, 6 ou 12 horas) e na hora em que o stop pausar uma estratégia
   robo.quandoPausar((id) => iaSinais.revisar('stop', id).catch(() => {}));
+  // modelo de valor: treina 1 minuto depois de ligar e a cada 2 horas, e recalcula as regras
+  const treinarModelo = () => { if (jogos.ligas().length) modelo.treinar().then(() => robo.revalidarTodas()).catch(() => {}); };
+  setTimeout(treinarModelo, 60000);
+  setInterval(treinarModelo, 2 * 3600e3);
   setInterval(() => {
     const horas = Number(getConfig('ia_revisao_horas', 6));
     if (!horas) return;

@@ -6,11 +6,13 @@ const { backtest, aoVivo, estatRed } = require('./validador');
 const jogos = require('./jogos');
 const tson = require('./tsontips');
 const tg = require('./telegram');
+const modelo = require('./modelo');
 
 const TZ = process.env.TZ_EXIBICAO || 'America/Fortaleza';
 const LISTA_LIGAS = Object.keys(LIGAS);
 const proximas = new Map();        // liga -> jogos agendados
-const oddsAgendadas = new Map();   // liga|inicio -> odds vistas antes do jogo
+const oddsAgendadas = new Map();   // liga|inicio -> odds vistas antes do jogo (as mais recentes)
+const oddsAbertura = new Map();    // liga|inicio -> primeira odd vista (movimento)
 const ultimoAvaliado = new Map();  // liga -> inicio do último alvo avaliado
 const estado = { ultimaColeta: null, ultimoErro: null, rodando: false };
 
@@ -47,8 +49,8 @@ function normalizar(p, liga, comPlacar) {
 }
 
 const inserir = db.prepare(`INSERT OR IGNORE INTO jogos
-  (id, liga, inicio, hora, minuto, time_casa, time_fora, gc, gf, gc_ht, gf_ht, odds)
-  VALUES (@id, @liga, @inicio, @hora, @minuto, @time_casa, @time_fora, @gc, @gf, @gc_ht, @gf_ht, @odds)`);
+  (id, liga, inicio, hora, minuto, time_casa, time_fora, gc, gf, gc_ht, gf_ht, odds, odds_abertura)
+  VALUES (@id, @liga, @inicio, @hora, @minuto, @time_casa, @time_fora, @gc, @gf, @gc_ht, @gf_ht, @odds, @odds_abertura)`);
 
 // "stale=1" devolve uma cópia em cache, atrasada 1-2 jogos. Só serve para carregar o histórico longo;
 // a coleta do dia a dia (1h) precisa dos dados frescos para o sinal sair a tempo.
@@ -73,6 +75,8 @@ function processar(dados) {
       const j = normalizar(p, liga, false);
       if (!j) continue;
       oddsAgendadas.set(j.id, j.odds);
+      if (!oddsAbertura.has(j.id) && Object.keys(j.odds).length) oddsAbertura.set(j.id, { ...j.odds, _visto: agora });
+      j.abertura = oddsAbertura.get(j.id) || null;
       if (j.t > agora) prox.push(j);
     }
     prox.sort((a, b) => a.t - b.t);
@@ -80,12 +84,16 @@ function processar(dados) {
     // jogos encerrados
     const fins = (bloco.partidas || []).map((p) => normalizar(p, liga, true)).filter(Boolean).sort((a, b) => a.t - b.t);
     for (const j of fins) {
-      const r = inserir.run({ ...j, odds: JSON.stringify(j.odds) });
+      const ab = oddsAbertura.get(j.id);
+      // só vale como "abertura" se foi vista pelo menos 3 minutos antes do jogo
+      j.abertura = ab && j.t - ab._visto >= 180000 ? ab : null;
+      const r = inserir.run({ ...j, odds: JSON.stringify(j.odds), odds_abertura: j.abertura ? JSON.stringify(j.abertura) : null });
       if (r.changes) { jogos.adicionar(j); novos.push(j); }
     }
   }
   // limpa odds antigas da memória
   for (const [k] of oddsAgendadas) if (Date.parse(k.split('|')[1]) < agora - 6 * 3600e3) oddsAgendadas.delete(k);
+  for (const [k] of oddsAbertura) if (Date.parse(k.split('|')[1]) < agora - 6 * 3600e3) oddsAbertura.delete(k);
   return novos;
 }
 
@@ -166,6 +174,21 @@ function montarMensagem({ liga, mercado, tiros, plano, hist = [], final = null, 
   }
 
   t += `${LINHA}\n`;
+  const a = meta.analise;
+  if (a) {
+    const linhas = [];
+    if (a.pModelo != null) linhas.push(`• Chance pelo modelo: <b>${a.pModelo}%</b>` + (a.pOdd != null ? ` · pela odd: ${a.pOdd}%` : ''));
+    else if (a.pOdd != null) linhas.push(`• Chance pela odd: <b>${a.pOdd}%</b> (modelo ainda em treino)`);
+    if (a.vantagem != null) linhas.push(a.vantagem >= 0 ? `• Vantagem sobre a odd: <b>+${a.vantagem}%</b> ✅` : `• Vantagem sobre a odd: <b>${a.vantagem}%</b> ⚠️`);
+    if (a.chanceTiros != null && tiros > 1) linhas.push(`• Chance de green em até ${tiros} tiros: <b>${a.chanceTiros}%</b>`);
+    if (a.movimento) linhas.push(`• Odd: ${Number(a.movimento.de).toFixed(2)} → ${Number(a.movimento.para).toFixed(2)} ${a.movimento.para < a.movimento.de ? '📉 caiu' : '📈 subiu'}`);
+    const curto = esc(MERCADOS[mercado].nome.replace(' gols', ''));
+    const fase = (nome, x) => x.rotulo ? `• ${esc(nome)}: ${x.rotulo} ${x.sim} dos últimos ${x.n} jogos` : `• ${esc(nome)}: ${curto} em ${x.sim} dos últimos ${x.n} jogos`;
+    if (a.casa) linhas.push(fase(plano[0] && plano[0].casa, a.casa));
+    if (a.fora) linhas.push(fase(plano[0] && plano[0].fora, a.fora));
+    if (linhas.length) t += `🧠 <b>ANÁLISE DO JOGO</b>\n${linhas.join('\n')}\n${LINHA}\n`;
+  }
+  if (meta.taxa != null) t += '📈 <b>ESTRATÉGIA</b>\n';
   if (meta.taxa != null) {
     t += `📊 Assertividade (${meta.fonte}): <b>${meta.taxa}%</b> em ${meta.n} sinais\n`;
     if (meta.roi != null) t += `💰 ROI: <b>${meta.roi > 0 ? '+' : ''}${meta.roi}%</b>\n`;
@@ -353,6 +376,11 @@ async function gerarSinais() {
       if (temPendente.get(regra.id, liga)) continue;          // ainda nos tiros do sinal anterior
       if (!avaliar(regra, hist, alvo)) continue;
       const odd = oddDo(alvo, regra.mercado);
+      // consenso: o modelo de valor precisa concordar (não pode ver a entrada como desvantajosa)
+      if (getConfig('consenso', false) && !regra.condicoes.some((c) => c.tipo === 'modelo') && modelo.temModelo(regra.mercado)) {
+        const p = modelo.prever(regra.mercado, hist, alvo);
+        if (p != null && odd && p * odd < 1) continue;
+      }
       const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
       const r = inserirSinal.run(regra.id, liga, alvo.inicio, alvo.time_casa, alvo.time_fora, regra.mercado, odd, tiros, alvo.inicio);
       if (!r.changes || regra.modo !== 'telegram') continue;
@@ -372,6 +400,10 @@ async function gerarSinais() {
       }
       const plano = planoDeTiros(liga, alvo, tiros, regra.mercado);
       const meta = metaDaRegra(regra);
+      try {
+        const seguintes = (proximas.get(liga) || []).filter((p) => p.t > alvo.t).slice(0, tiros - 1);
+        meta.analise = modelo.analiseJogo(regra.mercado, hist, alvo, seguintes);
+      } catch (e) { log('erro', `Análise do jogo: ${e.message}`); }
       const txt = montarMensagem({ liga, mercado: regra.mercado, tiros, plano, meta });
       const msgId = await tg.enviar(txt);
       // "texto" guarda os dados do envio para remontar a mensagem a cada tiro
@@ -523,4 +555,4 @@ function iniciar() {
   log('info', `Robô iniciado (coleta a cada ${seg}s)`);
 }
 
-module.exports = { quandoPausar, configStop, checarStop, iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };
+module.exports = { montarMensagem, quandoPausar, configStop, checarStop, iniciar, ciclo, receber, caminhoColeta, periodoAtual, estado, revalidarTodas, textoRelatorio, proximas };

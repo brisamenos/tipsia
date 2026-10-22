@@ -18,7 +18,7 @@ function regraVazia() {
   return { id: null, nome: '', ligas: ['*'], mercado: 'ambas_sim', modo: 'observacao', tiros: 1, condicoes: [condicaoVazia('sequencia')] };
 }
 function condicaoVazia(tipo) {
-  return { tipo, mercado: 'ambas_sim', n: 3, valor: false, op: '>=', qtd: 7, placar: '0-0', valores: '', min: '', max: '' };
+  return { tipo, mercado: 'ambas_sim', n: 3, valor: false, op: '>=', qtd: 7, placar: '0-0', valores: '', min: '', max: '', margem: 5 };
 }
 
 function painel() {
@@ -54,6 +54,7 @@ function painel() {
       if (aba === 'sinais') this.carregarSinais();
       if (aba === 'estatisticas') this.panorama = await api('/api/panorama');
       if (aba === 'descobrir') this.carregarDescoberta();
+      if (aba === 'modelo') this.carregarModelo();
       if (aba === 'iasinais') { if (!this.status) await this.carregarStatus(); this.carregarIA(); }
       if (aba === 'jogos') this.carregarJogos();
       if (aba === 'config') { await this.carregarStatus(); this.cfg.chat = this.status.telegram.chatId || ''; }
@@ -99,6 +100,7 @@ function painel() {
             case 'gols_anterior': return { tipo: c.tipo, op: c.op, qtd: +c.qtd };
             case 'minuto': case 'hora': return { tipo: c.tipo, valores: String(c.valores).split(/[,;\s]+/).filter(Boolean).map(Number) };
             case 'odd': return { tipo: c.tipo, min: c.min === '' ? '' : +c.min, max: c.max === '' ? '' : +c.max };
+            case 'modelo': return { tipo: c.tipo, margem: +c.margem || 5 };
           }
           return c;
         }),
@@ -144,6 +146,7 @@ function painel() {
         case 'minuto': return `minuto ${[].concat(c.valores).join(', ')}`;
         case 'hora': return `hora ${[].concat(c.valores).join(', ')}`;
         case 'odd': return `odd ${c.min !== '' ? 'de ' + c.min : ''} ${c.max !== '' ? 'até ' + c.max : ''}`;
+        case 'modelo': return `modelo vê vantagem ≥ ${c.margem}%`;
       }
       return c.tipo;
     },
@@ -166,12 +169,28 @@ function painel() {
       return m.oddMedia ?? '-';
     },
 
-    // ---- IA
-    async rodarIA() {
-      this.ia.carregando = true; this.ia.res = null;
-      try { this.ia.res = await api(`/api/ia/${this.ia.mercado}?margem=${this.ia.margem / 100}`); }
+    // ---- Modelo de valor
+    mod: null,
+    modCfg: { margem: 5 },
+    async carregarModelo() { this.mod = await api('/api/modelo'); this.modCfg.margem = this.mod.margem; },
+    async treinarModelo() {
+      try { await api('/api/modelo/treinar', { method: 'POST' }); } catch (e) { return this.toast(e.message); }
+      this.toast('Treinando o modelo...');
+      const t = setInterval(async () => { await this.carregarModelo(); if (!this.mod.rodando) clearInterval(t); }, 2000);
+      await this.carregarModelo();
+    },
+    async salvarModelo() {
+      await api('/api/modelo/config', { method: 'POST', body: { margem: this.modCfg.margem } });
+      this.treinarModelo();
+    },
+    async alternarConsenso() {
+      await api('/api/modelo/config', { method: 'POST', body: { consenso: !this.mod.consenso } });
+      await this.carregarModelo();
+      this.toast(this.mod.consenso ? 'Consenso ligado: o modelo precisa concordar para o sinal sair' : 'Consenso desligado');
+    },
+    async criarEstrategiaModelo(mercado) {
+      try { await api('/api/modelo/estrategia', { method: 'POST', body: { mercado } }); this.toast('Estratégia criada em observação na aba Regras'); this.carregarRegras(); }
       catch (e) { this.toast(e.message); }
-      this.ia.carregando = false;
     },
 
     // ---- Jogos
@@ -239,6 +258,7 @@ window.addEventListener('message',window.__lab);
     async carregarIA() {
       this.iaS = await api('/api/ia-sinais');
       this.iaCfg.modelo = this.iaS.modelo;
+      this.iaCfg.chave = '';
       this.iaCfg.qtd = this.iaS.qtd;
     },
     async salvarIA(extra = {}) {

@@ -10,8 +10,14 @@ const jogos = require('./jogos');
 const MERCADOS_PRINCIPAIS = ['ambas_sim', 'ambas_nao', 'over_15', 'over_25', 'over_35', 'under_25', 'casa', 'empate', 'fora'];
 const estado = { rodando: false, ultimoErro: null, ultimaVez: null };
 
-const chave = () => process.env.OPENAI_API_KEY || getConfig('openai_key') || '';
-const modelo = () => getConfig('openai_modelo') || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
+// Provedor da IA: 'openai' (ChatGPT) ou 'anthropic' (Claude)
+const provedor = () => (getConfig('ia_provedor') || process.env.IA_PROVEDOR || 'openai') === 'anthropic' ? 'anthropic' : 'openai';
+const chave = () => provedor() === 'anthropic'
+  ? process.env.ANTHROPIC_API_KEY || getConfig('anthropic_key') || ''
+  : process.env.OPENAI_API_KEY || getConfig('openai_key') || '';
+const modelo = () => provedor() === 'anthropic'
+  ? getConfig('anthropic_modelo') || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5'
+  : getConfig('openai_modelo') || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 
 // ---------- Mudanças recentes no comportamento de cada liga ----------
 function mudancas(janela = 150) {
@@ -64,6 +70,14 @@ function memoria() {
   return { atuais, excluidas: antigas.slice(0, 30) };
 }
 
+function resumoModelo() {
+  const r = getConfig('modelo_resultado');
+  if (!r) return null;
+  return { margem_percent: r.margem, dias_de_dados: r.dias, mercados: (r.mercados || []).map((m) => ({
+    mercado: m.mercado, melhora_sobre_odds_percent: m.melhora, entradas_com_valor: m.valor.n, taxa: m.valor.taxa,
+    roi: m.valor.roi, z: m.valor.z, dias_positivos: m.dias, status: m.status.codigo, por_liga: m.porLiga })) };
+}
+
 // ---------- Resumo dos dados para a IA ----------
 function contexto() {
   const ligas = {};
@@ -88,6 +102,7 @@ function contexto() {
     mudancas_recentes: mudancas().slice(0, 15),
     candidatas_que_se_sustentaram: desc ? (desc.sustentaram || []).slice(0, 25).map(resumir) : [],
     candidatas_melhores_no_treino: desc ? (desc.ranking || []).slice(0, 10).map(resumir) : [],
+    modelo_de_valor: resumoModelo(),
     suas_sugestoes_anteriores: memoria(),
   };
 }
@@ -117,29 +132,48 @@ Formato das regras:
   {"tipo":"gols_anterior","op":">="|"<=","qtd":<número>}
   {"tipo":"minuto","valores":[<minutos>]}  {"tipo":"hora","valores":[<horas>]}
   {"tipo":"odd","min":<número ou "">,"max":<número ou "">}  (odd do próprio mercado da regra)
+  {"tipo":"modelo","margem":5}  (só entra quando o MODELO DE VALOR vê vantagem de pelo menos "margem"% sobre a odd)
+- Veja "modelo_de_valor": são os mercados em que o modelo estatístico achou valor fora da amostra.
+  Combinar uma condição simples com {"tipo":"modelo"} costuma filtrar melhor do que só regras de sequência.
 ${pedido ? `\nPedido do usuário: ${pedido}\n` : ''}
 Responda APENAS com JSON no formato:
 {"sugestoes":[{"nome":"curto e claro em português","liga":"...","mercado":"...","condicoes":[...],"tiros":1,"justificativa":"1-2 frases em português"}],"observacoes":"análise geral em português, 2-4 frases"}`;
 }
 
-async function chamarOpenAI(sistema, dados) {
-  if (!chave()) throw new Error('Coloque a API Key da OpenAI na aba IA Sinais.');
+function lerJSON(txt) {
+  try { return JSON.parse(txt); } catch { /* tenta extrair */ }
+  const i = String(txt || '').indexOf('{'), f = String(txt || '').lastIndexOf('}');
+  if (i >= 0 && f > i) { try { return JSON.parse(txt.slice(i, f + 1)); } catch { /* inválido */ } }
+  throw new Error('A IA respondeu num formato inválido. Tente de novo.');
+}
+
+async function chamarIA(sistema, dados) {
+  const nomeProv = provedor() === 'anthropic' ? 'Claude' : 'OpenAI';
+  if (!chave()) throw new Error(`Coloque a API Key do ${nomeProv} na aba IA Sinais.`);
+  const conteudo = 'Dados atuais (JSON):\n' + JSON.stringify(dados);
+  if (provedor() === 'anthropic') {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': chave(), 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelo(), max_tokens: 4000, system: sistema + '\nResponda somente com o JSON, sem texto antes ou depois.',
+        messages: [{ role: 'user', content: conteudo }] }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`Claude: ${(j.error && j.error.message) || r.status}`);
+    return lerJSON((j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join(''));
+  }
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${chave()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: modelo(),
       response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: sistema },
-        { role: 'user', content: 'Dados atuais (JSON):\n' + JSON.stringify(dados) },
-      ],
+      messages: [{ role: 'system', content: sistema }, { role: 'user', content: conteudo }],
     }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`OpenAI: ${(j.error && j.error.message) || r.status}`);
-  const txt = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-  try { return JSON.parse(txt); } catch { throw new Error('A IA respondeu num formato inválido. Tente de novo.'); }
+  return lerJSON(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content);
 }
 
 function limparCondicao(c) {
@@ -152,6 +186,7 @@ function limparCondicao(c) {
     case 'gols_anterior': return { tipo: t, op: ['>=', '<=', '=', '>', '<'].includes(c.op) ? c.op : '>=', qtd: +c.qtd || 0 };
     case 'minuto': case 'hora': return { tipo: t, valores: [].concat(c.valores || []).map(Number).filter((x) => !Number.isNaN(x)) };
     case 'odd': return { tipo: t, min: c.min === '' || c.min == null ? '' : +c.min, max: c.max === '' || c.max == null ? '' : +c.max };
+    case 'modelo': return { tipo: t, margem: Math.min(30, Math.max(1, +c.margem || 5)) };
   }
   return null;
 }
@@ -164,7 +199,7 @@ async function sugerir(pedido = '') {
   try {
     const qtd = Math.min(10, Math.max(1, Number(getConfig('ia_qtd', 5)) || 5));
     const tirosPadrao = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
-    const resp = await chamarOpenAI(instrucoes(qtd, tirosPadrao, String(pedido).slice(0, 500)), contexto());
+    const resp = await chamarIA(instrucoes(qtd, tirosPadrao, String(pedido).slice(0, 500)), contexto());
     const criadas = [];
     const ins = db.prepare(`INSERT INTO regras (nome, ligas, mercado, condicoes, modo, tiros, origem, justificativa)
       VALUES (?, ?, ?, ?, 'pendente', ?, 'ia', ?)`);
@@ -303,7 +338,7 @@ async function revisar(motivo = 'agendada', somenteId = null) {
   estado.rodando = true;
   try {
     const ativas = db.prepare(`SELECT * FROM regras WHERE modo IN ('telegram','observacao','pendente')`).all().map((r) => resumoRegra(r, aoVivo(r.id)));
-    const resp = await chamarOpenAI(instrucoesRevisao(), {
+    const resp = await chamarIA(instrucoesRevisao(), {
       precisam_substituta: precisam, ligas_sem_estrategia: semEstrategia, estrategias_ativas: ativas,
       suas_sugestoes_anteriores: memoria(), mudancas_recentes: mudancas().slice(0, 10),
     });
@@ -352,9 +387,10 @@ function situacao() {
   const k = chave();
   return {
     ...estado,
+    provedor: provedor(),
     temChave: !!k,
     chaveFinal: k ? '••••' + k.slice(-4) : null,
-    chaveNoServidor: !!process.env.OPENAI_API_KEY,
+    chaveNoServidor: provedor() === 'anthropic' ? !!process.env.ANTHROPIC_API_KEY : !!process.env.OPENAI_API_KEY,
     modelo: modelo(),
     qtd: getConfig('ia_qtd', 5),
     auto: getConfig('ia_auto', false),
