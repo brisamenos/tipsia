@@ -65,7 +65,8 @@ function temBuraco() {
     const arr = jogos.daLiga(liga);
     if (arr.length < 30) continue;
     const iv = jogos.intervaloTipico(arr);
-    if (agora - arr[arr.length - 1].t > iv * 4 + 120000) return true;          // parou de chegar jogo
+    // parou de chegar jogo, mas a liga continua com jogos agendados (ligas que "dormem" à noite não contam)
+    if ((proximas.get(liga) || []).length && agora - arr[arr.length - 1].t > iv * 4 + 120000) return true;
     for (let i = arr.length - 1; i > 0 && agora - arr[i].t < 3 * 3600e3; i--) {
       if (arr[i].t - arr[i - 1].t > iv * 2.5) return true;                       // buraco no meio
     }
