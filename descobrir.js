@@ -64,7 +64,7 @@ async function rodar() {
     const todasLigas = Object.keys(LIGAS).filter((l) => jogos.daLiga(l).length > 100);
     const opcoesLiga = [['*', todasLigas], ...todasLigas.map((l) => [l, [l]])];
     const { c50, c75 } = cortes(todasLigas);
-    const tiros = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
+    const tiros = Math.min(4, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
     const planos = [];
     for (const mercado of Object.keys(MERCADOS)) {
       for (const c of candidatos(mercado)) for (const [chave, ligas] of opcoesLiga) planos.push({ mercado, c, chave, ligas });

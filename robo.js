@@ -422,7 +422,7 @@ async function gerarSinais() {
         const p = modelo.prever(regra.mercado, hist, alvo);
         if (p != null && odd && p * odd < 1) continue;
       }
-      const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
+      const tiros = Math.min(4, Math.max(1, Number(regra.tiros) || 1));
       const r = inserirSinal.run(regra.id, liga, alvo.inicio, alvo.time_casa, alvo.time_fora, regra.mercado, odd, tiros, alvo.inicio);
       if (!r.changes || regra.modo !== 'telegram') continue;
       // trava: outra estratégia já mandou este mesmo jogo + mercado? então não repete no Telegram

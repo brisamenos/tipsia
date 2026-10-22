@@ -120,7 +120,7 @@ Regras importantes:
   Reforce o tipo de ideia que está com ROI ao vivo positivo. Não repita uma regra que já existe.
   Diga em "observacoes" o que aprendeu com esses resultados.
 - Seja honesto: se nada parece ter vantagem real sobre a odd, proponha menos regras e diga isso em "observacoes".
-- Cada sinal pode ter de 1 a 3 tiros (o sinal vale para até N jogos seguidos). Padrão do usuário: ${tiros}.
+- Cada sinal pode ter de 1 a 4 tiros (o sinal vale para até N jogos seguidos). Padrão do usuário: ${tiros}.
 
 Formato das regras:
 - liga: "*" (todas) ou uma destas chaves: ${Object.keys(LIGAS).join(', ')}
@@ -199,7 +199,7 @@ async function sugerir(pedido = '') {
   estado.ultimoErro = null;
   try {
     const qtd = Math.min(10, Math.max(1, Number(getConfig('ia_qtd', 5)) || 5));
-    const tirosPadrao = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
+    const tirosPadrao = Math.min(4, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
     const resp = await chamarIA(instrucoes(qtd, tirosPadrao, String(pedido).slice(0, 500)), contexto());
     const criadas = [];
     const ins = db.prepare(`INSERT INTO regras (nome, ligas, mercado, condicoes, modo, tiros, origem, justificativa)
@@ -213,7 +213,7 @@ async function sugerir(pedido = '') {
         mercado: sug.mercado,
         condicoes: (sug.condicoes || []).map(limparCondicao).filter(Boolean),
         modo: 'observacao',
-        tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
+        tiros: Math.min(4, Math.max(1, Number(sug.tiros) || tirosPadrao)),
       };
       if (validarEstrutura(regra).length || jaExisteParecida(regra) || modeloInvalido(regra)) continue;
       const info = ins.run(regra.nome, JSON.stringify(regra.ligas), regra.mercado, JSON.stringify(regra.condicoes),
@@ -256,7 +256,7 @@ function jaExisteParecida(regra) {
 
 // Cria a regra pendente, testa no histórico e só mantém se tiver lucro nas 3 partes
 function criarPendente(sug, { substitui = null, ligaObrigatoria = null } = {}) {
-  const tirosPadrao = Math.min(3, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
+  const tirosPadrao = Math.min(4, Math.max(1, Number(getConfig('tiros_padrao', 1)) || 1));
   const liga = ligaObrigatoria || (sug.liga === '*' || LIGAS[sug.liga] ? sug.liga : null);
   if (!liga) return { ok: false, motivo: 'liga inválida' };
   const regra = {
@@ -265,7 +265,7 @@ function criarPendente(sug, { substitui = null, ligaObrigatoria = null } = {}) {
     mercado: sug.mercado,
     condicoes: (sug.condicoes || []).map(limparCondicao).filter(Boolean),
     modo: 'observacao',
-    tiros: Math.min(3, Math.max(1, Number(sug.tiros) || tirosPadrao)),
+    tiros: Math.min(4, Math.max(1, Number(sug.tiros) || tirosPadrao)),
   };
   if (validarEstrutura(regra).length) return { ok: false, motivo: 'formato inválido' };
   if (modeloInvalido(regra)) return { ok: false, motivo: 'o modelo de valor não calcula este mercado' };

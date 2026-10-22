@@ -164,7 +164,7 @@ function analisar(entradas, c50, c75) {
 
 // Percorre todos os jogos das ligas da regra e simula o sinal
 function simular(regra) {
-  const tiros = Math.min(3, Math.max(1, Number(regra.tiros) || 1));
+  const tiros = Math.min(4, Math.max(1, Number(regra.tiros) || 1));
   const entradas = [];
   for (const liga of ligasDaRegra(regra, Object.keys(LIGAS))) entradas.push(...simularLiga(regra, liga, tiros));
   entradas.sort((a, b) => a.t - b.t);
@@ -216,7 +216,7 @@ function backtest(regra) {
     reds: estatRed(entradas),
     base: base(regra, c50),
     aoVivo: aoVivo(regra.id),
-    tiros: Math.min(3, Math.max(1, Number(regra.tiros) || 1)),
+    tiros: Math.min(4, Math.max(1, Number(regra.tiros) || 1)),
     frequencia: totalJogos ? +(entradas.length / totalJogos * 100).toFixed(2) : 0,
   };
 }

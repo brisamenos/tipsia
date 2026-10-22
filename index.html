@@ -245,7 +245,7 @@
               x-text="'Lucrou em ' + r.validacao?.dias?.positivos + ' de ' + r.validacao?.dias?.total + ' dias'"></div>
             <div></div>
             <div class="fixo"><select style="width:auto" :value="r.tiros || 1" @change="tirosIA(r, $event.target.value)">
-              <option value="1">1 tiro</option><option value="2">2 tiros</option><option value="3">3 tiros</option></select></div>
+              <option value="1">1 tiro</option><option value="2">2 tiros</option><option value="3">3 tiros</option><option value="4">4 tiros</option></select></div>
             <template x-if="r.modo === 'pendente'">
               <div class="fixo"><button class="btn peq" @click="aprovarTroca(r)" x-text="r.substitui ? 'Aprovar troca' : 'Aprovar (Telegram)'"></button></div>
             </template>
@@ -390,7 +390,7 @@
           </select></div>
         <div class="fixo" style="width:120px"><label>Tiros</label>
           <select x-model="editando.tiros">
-            <template x-for="t in [1,2,3]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="+editando.tiros === t"></option></template>
+            <template x-for="t in [1,2,3,4]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="+editando.tiros === t"></option></template>
           </select></div>
       </div>
       <div class="campo"><label>Ligas</label>
@@ -706,7 +706,7 @@
         <div class="linha">
           <div class="fixo" style="width:200px"><label>Tiros padrão (novas regras)</label>
             <select x-model.number="status.tirosPadrao">
-              <template x-for="t in [1,2,3]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="status.tirosPadrao === t"></option></template>
+              <template x-for="t in [1,2,3,4]"><option :value="t" x-text="t + (t === 1 ? ' tiro' : ' tiros')" :selected="status.tirosPadrao === t"></option></template>
             </select></div>
           <div class="fixo" style="width:220px"><label>Antecedência do sinal (segundos)</label>
             <input type="number" min="30" max="180" x-model.number="status.antecedencia"></div>
