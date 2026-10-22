@@ -74,7 +74,7 @@ function simularLiga(regra, liga, tiros = 1) {
     if (incompleto) continue;
     for (let k2 = k + 1; k2 < tiros && i + k2 < arr.length; k2++) { const o = oddDo(arr[i + k2], regra.mercado); if (o) q *= 1 - 1 / o; }
     out.push({
-      t: arr[i].t, liga, acerto: tiro > 0, tiro,
+      t: arr[i].t, tr: arr[Math.min(arr.length - 1, i + (tiro || tiros) - 1)].t, liga, acerto: tiro > 0, tiro,
       odd: oddDo(arr[i], regra.mercado),
       lucro: semOdd ? null : +lucro.toFixed(4),
       apostas: tiro || tiros,
@@ -101,6 +101,31 @@ function classificar(treino, teste, extra = {}) {
   if (treino.roi > 0 && teste.roi <= 0)
     return { codigo: 'ilusao', texto: 'Ilusão: funcionou no passado e falhou nos jogos novos' };
   return { codigo: 'reprovada', texto: 'Reprovada: não supera a margem da casa' };
+}
+
+// Estatísticas de RED: onde caíram, distância média, maior sequência e o teste "depois do RED"
+function estatRed(entradas) {
+  const lista = [...entradas].sort((a, b) => a.t - b.t);
+  const n = lista.length;
+  const reds = lista.filter((e) => !e.acerto);
+  let seqR = 0, seqG = 0, maxR = 0, maxG = 0;
+  const aposRed = [];
+  lista.forEach((e, i) => {
+    if (e.acerto) { seqG++; seqR = 0; } else { seqR++; seqG = 0; }
+    maxR = Math.max(maxR, seqR); maxG = Math.max(maxG, seqG);
+    if (i > 0 && !lista[i - 1].acerto) aposRed.push(e.acerto);
+  });
+  const taxa = (arr) => (arr.length ? +(arr.filter(Boolean).length / arr.length * 100).toFixed(1) : null);
+  return {
+    n,
+    reds: reds.length,
+    ultimos: reds.slice(-3).reverse().map((e) => new Date(e.tr || e.t).toISOString()),
+    cada: reds.length ? +(n / reds.length).toFixed(1) : null,   // 1 RED a cada X sinais
+    maiorSeqRed: maxR,
+    maiorSeqGreen: maxG,
+    geral: taxa(lista.map((e) => e.acerto)),
+    aposRed: { n: aposRed.length, taxa: taxa(aposRed) },
+  };
 }
 
 // Pontos de corte: 50% (fim do treino) e 75% (fim da validação). Os últimos 25% são a "prova final".
@@ -187,6 +212,7 @@ function backtest(regra) {
     corte: c50 ? new Date(c50).toISOString() : null,
     corteProva: c75 ? new Date(c75).toISOString() : null,
     ...a,
+    reds: estatRed(entradas),
     base: base(regra, c50),
     aoVivo: aoVivo(regra.id),
     tiros: Math.min(3, Math.max(1, Number(regra.tiros) || 1)),
@@ -208,4 +234,4 @@ function panorama() {
   return out;
 }
 
-module.exports = { backtest, panorama, estatisticas, classificar, simularLiga, defasagem, cortes, analisar, porDia, aoVivo };
+module.exports = { backtest, panorama, estatisticas, classificar, simularLiga, defasagem, cortes, analisar, porDia, aoVivo, estatRed };
